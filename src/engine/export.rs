@@ -413,12 +413,198 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
         ));
     }
 
+    // --- Edge anchoring for distinct, traceable branches (properties L3/L4) ---
+    // Group edges by source (fan-out) and target (fan-in).
+    let mut out_edges: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut in_edges: HashMap<&str, Vec<usize>> = HashMap::new();
     for (i, e) in fc.edges.iter().enumerate() {
+        out_edges.entry(e.from.as_str()).or_default().push(i);
+        in_edges.entry(e.to.as_str()).or_default().push(i);
+    }
+    let shape_of: HashMap<&str, Shape> =
+        fc.nodes.iter().map(|n| (n.id.as_str(), n.shape)).collect();
+    let is_diamond = |id: &str| matches!(shape_of.get(id), Some(Shape::Diamond));
+
+    let vertical = fc.direction.is_vertical();
+    let cross_of = |bx: Box| if vertical { bx.x + bx.w / 2.0 } else { bx.y + bx.h / 2.0 };
+    let main_of = |bx: Box| if vertical { bx.y + bx.h / 2.0 } else { bx.x + bx.w / 2.0 };
+
+    // Diamonds connect only at their four tips (top/right/bottom/left); a point
+    // anywhere else on the bounding box floats off the slanted sides. So for a
+    // decision we route incoming to the rear tip and each branch to a distinct
+    // tip chosen by the target's direction. Rectangles keep fractional spreading
+    // along the forward face (valid on a straight edge).
+    const TOP: (f64, f64) = (0.5, 0.0);
+    const BOTTOM: (f64, f64) = (0.5, 1.0);
+    const LEFT: (f64, f64) = (0.0, 0.5);
+    const RIGHT: (f64, f64) = (1.0, 0.5);
+
+    // Tip for a branch leaving a decision toward `b` (source box `a`).
+    // Rear tip a decision receives its single incoming edge on.
+    let diamond_entry_tip = |a: Box, b: Box| -> (f64, f64) {
+        let dmain = main_of(a) - main_of(b);
+        let dcross = cross_of(a) - cross_of(b);
+        let rear = if vertical { TOP } else { LEFT };
+        let front = if vertical { BOTTOM } else { RIGHT };
+        let up = if vertical { LEFT } else { TOP };
+        let down = if vertical { RIGHT } else { BOTTOM };
+        if dmain.abs() >= dcross.abs() {
+            if dmain >= 0.0 { rear } else { front }
+        } else if dcross < 0.0 {
+            up
+        } else {
+            down
+        }
+    };
+
+    // For rectangle-like nodes, spread k edges across the forward/incoming face.
+    let frac = |rank: usize, count: usize| (rank as f64 + 1.0) / (count as f64 + 1.0);
+    let order_by_target_cross = |idxs: &[usize], pick_other: &dyn Fn(usize) -> Box| -> Vec<usize> {
+        let mut ord = idxs.to_vec();
+        ord.sort_by(|&i, &j| {
+            cross_of(pick_other(i))
+                .partial_cmp(&cross_of(pick_other(j)))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        ord
+    };
+
+    // Precompute exit anchors.
+    let mut exit_anchor: HashMap<usize, (f64, f64)> = HashMap::new();
+    for (src, idxs) in out_edges.iter() {
+        if idxs.len() < 2 {
+            continue;
+        }
+        let a = l.get(src);
+        if is_diamond(src) {
+            // Decision fan-out: order branches by target cross-position and map
+            // them onto distinct tips. Rear tip is reserved for the incoming
+            // edge; branches use up / forward / down.
+            let ord = order_by_target_cross(idxs, &|i| l.get(&fc.edges[i].to));
+            let (up, fwd, down) = if vertical {
+                (LEFT, BOTTOM, RIGHT)
+            } else {
+                (TOP, RIGHT, BOTTOM)
+            };
+            let n = ord.len();
+            for (rank, &ei) in ord.iter().enumerate() {
+                let b = l.get(&fc.edges[ei].to);
+                let dc = cross_of(b) - cross_of(a);
+                let tip = if n == 2 {
+                    // Two branches ALWAYS use two distinct tips (even when both
+                    // point to the same target). Rank decides which: the first
+                    // branch goes forward, the second drops to the "down" tip —
+                    // unless their targets clearly separate on the cross axis,
+                    // in which case follow geometry (up vs down).
+                    let other = l.get(&fc.edges[ord[1 - rank]].to);
+                    let dc_other = cross_of(other) - cross_of(a);
+                    if (dc - dc_other).abs() >= 24.0 {
+                        if dc <= dc_other { up } else { down }
+                    } else if rank == 0 {
+                        fwd
+                    } else {
+                        down
+                    }
+                } else if rank == 0 {
+                    up
+                } else if rank + 1 == n {
+                    down
+                } else {
+                    fwd
+                };
+                exit_anchor.insert(ei, tip);
+            }
+        } else {
+            let ord = order_by_target_cross(idxs, &|i| l.get(&fc.edges[i].to));
+            let n = ord.len();
+            for (rank, &ei) in ord.iter().enumerate() {
+                let f = frac(rank, n);
+                exit_anchor.insert(ei, if vertical { (f, 1.0) } else { (1.0, f) });
+            }
+        }
+    }
+    // Single outgoing edge from a decision snaps to its forward tip.
+    for (src, idxs) in out_edges.iter() {
+        if idxs.len() == 1 && is_diamond(src) {
+            let ei = idxs[0];
+            let a = l.get(src);
+            let b = l.get(&fc.edges[ei].to);
+            let dc = cross_of(b) - cross_of(a);
+            let (up, fwd, down) = if vertical { (LEFT, BOTTOM, RIGHT) } else { (TOP, RIGHT, BOTTOM) };
+            let tip = if dc.abs() < 24.0 { fwd } else if dc < 0.0 { up } else { down };
+            exit_anchor.insert(ei, tip);
+        }
+    }
+
+    // Precompute entry anchors.
+    let mut entry_anchor: HashMap<usize, (f64, f64)> = HashMap::new();
+    for (tgt, idxs) in in_edges.iter() {
+        if idxs.len() < 2 {
+            continue;
+        }
+        if is_diamond(tgt) {
+            let b = l.get(tgt);
+            let mut used: Vec<(f64, f64)> = Vec::new();
+            for &ei in idxs.iter() {
+                let mut tip = diamond_entry_tip(l.get(&fc.edges[ei].from), b);
+                let mut guard = 0;
+                while used.iter().any(|u| (u.0 - tip.0).abs() < 0.01 && (u.1 - tip.1).abs() < 0.01) && guard < 4 {
+                    tip = match tip {
+                        TOP => RIGHT,
+                        RIGHT => BOTTOM,
+                        BOTTOM => LEFT,
+                        _ => TOP,
+                    };
+                    guard += 1;
+                }
+                used.push(tip);
+                entry_anchor.insert(ei, tip);
+            }
+        } else {
+            let ord = order_by_target_cross(idxs, &|i| l.get(&fc.edges[i].from));
+            let n = ord.len();
+            for (rank, &ei) in ord.iter().enumerate() {
+                let f = frac(rank, n);
+                entry_anchor.insert(ei, if vertical { (f, 0.0) } else { (0.0, f) });
+            }
+        }
+    }
+    // Single incoming edge into a decision snaps to its rear tip.
+    for (tgt, idxs) in in_edges.iter() {
+        if idxs.len() == 1 && is_diamond(tgt) {
+            let ei = idxs[0];
+            entry_anchor.insert(ei, diamond_entry_tip(l.get(&fc.edges[ei].from), l.get(tgt)));
+        }
+    }
+
+    for (i, e) in fc.edges.iter().enumerate() {
+        let mut style = drawio_edge_style(e);
+        let fan_out = out_edges.get(e.from.as_str()).map(|v| v.len()).unwrap_or(0) >= 2;
+        let fan_in = in_edges.get(e.to.as_str()).map(|v| v.len()).unwrap_or(0) >= 2;
+
+        if let Some(&(ex, ey)) = exit_anchor.get(&i) {
+            style.push_str(&format!("exitX={ex};exitY={ey};exitDx=0;exitDy=0;"));
+        }
+        if let Some(&(nx, ny)) = entry_anchor.get(&i) {
+            style.push_str(&format!("entryX={nx};entryY={ny};entryDx=0;entryDy=0;"));
+        }
+
+        // Label placement: bias toward the separated end so it sits on this
+        // branch's own segment, not the shared trunk.
+        let has_label = e.label.as_deref().map(|l| !l.is_empty()).unwrap_or(false);
+        let geom = if has_label && fan_out {
+            "<mxGeometry x=\"-0.5\" relative=\"1\" as=\"geometry\"><mxPoint as=\"offset\"/></mxGeometry>"
+        } else if has_label && fan_in {
+            "<mxGeometry x=\"0.5\" relative=\"1\" as=\"geometry\"><mxPoint as=\"offset\"/></mxGeometry>"
+        } else {
+            "<mxGeometry relative=\"1\" as=\"geometry\"/>"
+        };
+
         cells.push_str(&format!(
             "        <mxCell id=\"edge{i}\" value=\"{}\" style=\"{}\" edge=\"1\" parent=\"1\" \
-             source=\"{}\" target=\"{}\">\n          <mxGeometry relative=\"1\" as=\"geometry\"/>\n        </mxCell>\n",
+             source=\"{}\" target=\"{}\">\n          {geom}\n        </mxCell>\n",
             xml_escape(e.label.as_deref().unwrap_or("")),
-            drawio_edge_style(e),
+            style,
             ident(&e.from),
             ident(&e.to),
         ));

@@ -7,6 +7,7 @@
 pub mod export;
 pub mod import;
 pub mod layout;
+pub mod validate;
 
 use serde::{Deserialize, Serialize};
 
