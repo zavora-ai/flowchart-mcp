@@ -308,59 +308,86 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
     let l = layout::compute(fc);
     let mut cells = String::new();
 
-    // Map node id → innermost container id (the one listing it as a member).
-    let node_parent: HashMap<&str, &str> = fc
-        .subgraphs
-        .iter()
-        .flat_map(|sg| sg.members.iter().map(move |m| (m.as_str(), sg.id.as_str())))
-        .collect();
+    // Reserve a header band when the chart has a title; every absolute y is
+    // shifted down by this amount so the title sits cleanly on top.
+    let header = if fc.title.as_deref().map(|t| !t.is_empty()).unwrap_or(false) {
+        46.0
+    } else {
+        0.0
+    };
 
-    // Absolute boxes per container.
-    let abs: HashMap<&str, Box> = fc
-        .subgraphs
-        .iter()
-        .filter_map(|sg| container_abs_box(fc, &l, &sg.id).map(|b| (sg.id.as_str(), b)))
-        .collect();
+    // Title header.
+    if header > 0.0 {
+        let title = fc.title.as_deref().unwrap_or("");
+        cells.push_str(&format!(
+            "        <mxCell id=\"title\" value=\"{}\" style=\"text;html=1;strokeColor=none;fillColor=none;\
+             align=left;verticalAlign=middle;whiteSpace=wrap;fontSize=18;fontStyle=1;fontColor=#1F2A37;\" \
+             vertex=\"1\" parent=\"1\">\n          \
+             <mxGeometry x=\"{:.0}\" y=\"8\" width=\"{:.0}\" height=\"32\" as=\"geometry\"/>\n        </mxCell>\n",
+            xml_escape(title),
+            layout::MARGIN,
+            (l.width - layout::MARGIN * 2.0).max(200.0),
+        ));
+    }
 
-    // Containers, parents first so draw.io resolves parent cells in order.
+    // Swimlane bands (full-length, non-overlapping) from the lane-aware layout.
+    // Emitted as background cells; nodes are positioned absolutely on top.
+    let lane_ids: std::collections::HashSet<&str> =
+        l.lanes.iter().map(|lg| lg.id.as_str()).collect();
+    let vertical = fc.direction.is_vertical();
+    for lg in &l.lanes {
+        let label = fc
+            .subgraphs
+            .iter()
+            .find(|s| s.id == lg.id)
+            .map(|s| s.label.as_str())
+            .unwrap_or("");
+        cells.push_str(&format!(
+            "        <mxCell id=\"{}\" value=\"{}\" style=\"{}\" vertex=\"1\" parent=\"1\">\n          \
+             <mxGeometry x=\"{:.0}\" y=\"{:.0}\" width=\"{:.0}\" height=\"{:.0}\" as=\"geometry\"/>\n        </mxCell>\n",
+            ident(&lg.id),
+            xml_escape(label),
+            drawio_lane_style(vertical),
+            lg.b.x,
+            lg.b.y + header,
+            lg.b.w,
+            lg.b.h,
+        ));
+    }
+
+    // Non-swimlane containers (group/container/pool) keep member-bounds boxes.
     for i in ordered_containers(fc) {
         let sg = &fc.subgraphs[i];
-        let Some(b) = abs.get(sg.id.as_str()).copied() else {
+        if lane_ids.contains(sg.id.as_str()) {
+            continue;
+        }
+        let Some(b) = container_abs_box(fc, &l, &sg.id) else {
             continue;
         };
-        let (parent_cell, origin) = match &sg.parent {
-            Some(p) => (ident(p), abs.get(p.as_str()).copied().unwrap_or(b)),
-            None => ("1".to_string(), Box { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }),
-        };
         cells.push_str(&format!(
-            "        <mxCell id=\"{}\" value=\"{}\" style=\"{}\" vertex=\"1\" parent=\"{}\">\n          \
+            "        <mxCell id=\"{}\" value=\"{}\" style=\"{}\" vertex=\"1\" parent=\"1\">\n          \
              <mxGeometry x=\"{:.0}\" y=\"{:.0}\" width=\"{:.0}\" height=\"{:.0}\" as=\"geometry\"/>\n        </mxCell>\n",
             ident(&sg.id),
             xml_escape(&sg.label),
             drawio_container_style(sg),
-            parent_cell,
-            b.x - origin.x,
-            b.y - origin.y,
+            b.x,
+            b.y + header,
             b.w,
             b.h,
         ));
     }
 
+    // Nodes — absolute coordinates at the root layer (stable, no reflow).
     for node in &fc.nodes {
         let b = l.get(&node.id);
-        let (parent_cell, origin) = match node_parent.get(node.id.as_str()) {
-            Some(c) => (ident(c), abs.get(*c).copied().unwrap_or(Box { x: 0.0, y: 0.0, w: 0.0, h: 0.0 })),
-            None => ("1".to_string(), Box { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }),
-        };
         cells.push_str(&format!(
-            "        <mxCell id=\"{}\" value=\"{}\" style=\"{}\" vertex=\"1\" parent=\"{}\">\n          \
+            "        <mxCell id=\"{}\" value=\"{}\" style=\"{}\" vertex=\"1\" parent=\"1\">\n          \
              <mxGeometry x=\"{:.0}\" y=\"{:.0}\" width=\"{:.0}\" height=\"{:.0}\" as=\"geometry\"/>\n        </mxCell>\n",
             ident(&node.id),
             xml_escape(&node.label),
             drawio_node_style(node),
-            parent_cell,
-            b.x - origin.x,
-            b.y - origin.y,
+            b.x,
+            b.y + header,
             b.w,
             b.h,
         ));
@@ -386,8 +413,20 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
          </mxGraphModel>\n  </diagram>\n",
         ident(name),
         xml_escape(name),
-        l.width.max(800.0),
-        l.height.max(600.0),
+        (l.width + 40.0).max(800.0),
+        (l.height + header + 40.0).max(600.0),
+    )
+}
+
+/// Swimlane band style. Title bar on the left for horizontal flow (LR/RL),
+/// on top for vertical flow (TB/BT).
+fn drawio_lane_style(vertical: bool) -> String {
+    format!(
+        "swimlane;whiteSpace=wrap;html=1;startSize={:.0};horizontal={};\
+         fillColor=#F5F8FB;swimlaneFillColor=#FFFFFF;strokeColor=#9DB3C8;\
+         fontColor=#1F2A37;fontStyle=1;fontSize=13;",
+        layout::LANE_TITLE,
+        if vertical { 1 } else { 0 },
     )
 }
 
@@ -467,8 +506,37 @@ fn drawio_style(shape: Shape, style: &Style, image: Option<&str>) -> String {
         Shape::Document => "shape=document;whiteSpace=wrap;html=1;boundedLbl=1;".to_string(),
     };
     let mut s = base;
+    apply_theme(&mut s, shape, style);
     push_common(&mut s, style);
     s
+}
+
+/// Default fill/stroke/font per shape, applied only for fields the caller did
+/// not set. Gives polished output (tinted terminators, amber decisions, blue
+/// documents, soft-blue process boxes) without requiring explicit styling.
+fn apply_theme(s: &mut String, shape: Shape, style: &Style) {
+    let (fill, stroke, font) = match shape {
+        Shape::Stadium | Shape::Circle | Shape::DoubleCircle => ("#1F6FB8", "#15527F", "#FFFFFF"),
+        Shape::Diamond => ("#FFF2CC", "#D6B656", "#7A5C00"),
+        Shape::Document | Shape::Note | Shape::Card => ("#DAE8FC", "#6C8EBF", "#1F2A37"),
+        Shape::Cylinder => ("#E1D5E7", "#9673A6", "#1F2A37"),
+        _ => ("#EAF2FB", "#4A7AAA", "#1F2A37"),
+    };
+    if style.fill.is_none() {
+        s.push_str(&format!("fillColor={fill};"));
+    }
+    if style.stroke.is_none() {
+        s.push_str(&format!("strokeColor={stroke};"));
+    }
+    if style.text_color.is_none() {
+        s.push_str(&format!("fontColor={font};"));
+    }
+    if matches!(shape, Shape::Stadium) && style.bold.is_none() {
+        s.push_str("fontStyle=1;");
+    }
+    if style.font_size.is_none() {
+        s.push_str("fontSize=12;");
+    }
 }
 
 /// Append the shared style fields onto a draw.io style string.
@@ -524,20 +592,22 @@ fn drawio_edge_style(e: &Edge) -> String {
         .routing
         .unwrap_or(super::EdgeRouting::Orthogonal)
         .drawio();
-    let mut s = format!("{routing}html=1;");
+    let mut s = format!("{routing}html=1;jettySize=auto;");
     match e.line {
         LineStyle::Dotted => s.push_str("dashed=1;"),
         LineStyle::Thick => s.push_str("strokeWidth=3;"),
         LineStyle::Solid => {}
     }
     s.push_str(&format!(
-        "startArrow={};endArrow={};",
+        "startArrow={};endArrow={};endFill=1;",
         e.resolved_start().drawio(),
         e.resolved_end().drawio()
     ));
-    if let Some(c) = &e.color {
-        s.push_str(&format!("strokeColor={c};"));
-    }
+    // Default connector color + white label backing so labels stay legible.
+    s.push_str(&format!(
+        "strokeColor={};fontColor=#44515E;fontSize=11;labelBackgroundColor=#FFFFFF;",
+        e.color.as_deref().unwrap_or("#44515E"),
+    ));
     s
 }
 
@@ -851,16 +921,21 @@ mod tests {
     }
 
     #[test]
-    fn drawio_nested_containers_use_parent() {
-        let mut fc = Flowchart::new(Direction::TB);
+    fn drawio_swimlane_renders_as_band() {
+        // Swimlanes now render as full-length bands at the root layer (nodes are
+        // placed absolutely on top), which avoids the old lane-overlap problem.
+        let mut fc = Flowchart::new(Direction::LR);
         fc.add_node("n", "N", Shape::Rectangle).unwrap();
         fc.add_subgraph("pool", "Pool", vec![], ContainerKind::Pool, None, None).unwrap();
         fc.add_subgraph("lane", "Lane", vec!["n".into()], ContainerKind::Swimlane, None, Some("pool".into())).unwrap();
-        let mut doc = Document::new(Direction::TB);
+        let mut doc = Document::new(Direction::LR);
         *doc.chart() = fc;
         let x = to_drawio(&doc);
+        // Lane is emitted as a swimlane band with its label.
         assert!(x.contains("swimlane"));
-        assert!(x.contains("parent=\"pool\""));
+        assert!(x.contains("value=\"Lane\""));
+        // Bands attach to the root layer, not nested via relative geometry.
+        assert!(x.contains("id=\"lane\" value=\"Lane\""));
     }
 
     #[test]

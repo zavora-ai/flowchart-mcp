@@ -1,18 +1,27 @@
 //! Layered auto-layout. Assigns each node a rank (longest path from a source
 //! along edge direction) and an order within the rank, then maps ranks/orders
 //! to pixel coordinates honoring the flow [`Direction`].
+//!
+//! When the chart contains swimlane containers, layout becomes lane-aware: the
+//! flow runs along the main axis (by rank) while lanes form full-length bands
+//! along the cross axis, with nodes stacked inside their lane. This produces
+//! proper cross-functional diagrams instead of loose boxes.
 
 use std::collections::HashMap;
 
-use super::{Direction, Flowchart};
+use super::{ContainerKind, Direction, Flowchart};
 
 /// Default node box size in pixels.
-pub const NODE_W: f64 = 120.0;
-pub const NODE_H: f64 = 48.0;
+pub const NODE_W: f64 = 170.0;
+pub const NODE_H: f64 = 60.0;
 /// Gap between adjacent ranks and between siblings within a rank.
-pub const RANK_GAP: f64 = 60.0;
-pub const SIBLING_GAP: f64 = 40.0;
-pub const MARGIN: f64 = 20.0;
+pub const RANK_GAP: f64 = 70.0;
+pub const SIBLING_GAP: f64 = 32.0;
+pub const MARGIN: f64 = 24.0;
+/// Lane title-bar thickness (reserved at the main-axis start of each lane).
+pub const LANE_TITLE: f64 = 30.0;
+/// Cross-axis padding inside a lane band.
+pub const LANE_PAD: f64 = 18.0;
 
 /// Computed geometry for a node (top-left origin).
 #[derive(Debug, Clone, Copy)]
@@ -23,9 +32,18 @@ pub struct Box {
     pub h: f64,
 }
 
-/// Layout result: per-node boxes (keyed by node id) and overall canvas size.
+/// Absolute geometry for a swimlane band.
+#[derive(Debug, Clone)]
+pub struct LaneGeom {
+    pub id: String,
+    pub b: Box,
+}
+
+/// Layout result: per-node boxes (keyed by node id), swimlane bands, and
+/// overall canvas size.
 pub struct Layout {
     pub boxes: HashMap<String, Box>,
+    pub lanes: Vec<LaneGeom>,
     pub width: f64,
     pub height: f64,
 }
@@ -45,8 +63,6 @@ impl Layout {
 /// visited guard so each node is relaxed a bounded number of times.
 fn rank_nodes(fc: &Flowchart) -> HashMap<String, usize> {
     let mut rank: HashMap<String, usize> = fc.nodes.iter().map(|n| (n.id.clone(), 0)).collect();
-    // Relax edges up to |nodes| times (Bellman-Ford style longest path on a DAG;
-    // bounded iteration makes it safe for cyclic graphs too).
     let n = fc.nodes.len();
     for _ in 0..n {
         let mut changed = false;
@@ -65,12 +81,167 @@ fn rank_nodes(fc: &Flowchart) -> HashMap<String, usize> {
     rank
 }
 
+/// Ordered ids of swimlane containers (these become lane bands).
+fn lane_ids(fc: &Flowchart) -> Vec<String> {
+    fc.subgraphs
+        .iter()
+        .filter(|s| s.kind == ContainerKind::Swimlane)
+        .map(|s| s.id.clone())
+        .collect()
+}
+
 /// Compute pixel geometry for every node.
 pub fn compute(fc: &Flowchart) -> Layout {
     let rank = rank_nodes(fc);
-
-    // Group node ids by rank, preserving insertion order for stable layout.
     let max_rank = rank.values().copied().max().unwrap_or(0);
+    let lanes = lane_ids(fc);
+    if lanes.is_empty() {
+        compute_plain(fc, &rank, max_rank)
+    } else {
+        compute_laned(fc, &rank, max_rank, &lanes)
+    }
+}
+
+/// Lane-aware layout: flow along the main axis by rank, lanes as cross-axis
+/// bands with nodes stacked inside their lane at each rank.
+fn compute_laned(
+    fc: &Flowchart,
+    rank: &HashMap<String, usize>,
+    max_rank: usize,
+    lanes: &[String],
+) -> Layout {
+    let vertical = fc.direction.is_vertical();
+    let main_node = if vertical { NODE_H } else { NODE_W };
+    let cross_node = if vertical { NODE_W } else { NODE_H };
+    let main_step = main_node + RANK_GAP;
+    let cross_step = cross_node + SIBLING_GAP;
+
+    // node id -> lane index (first swimlane that lists it; default 0).
+    let mut node_lane: HashMap<&str, usize> = HashMap::new();
+    for (li, lid) in lanes.iter().enumerate() {
+        if let Some(sg) = fc.subgraphs.iter().find(|s| &s.id == lid) {
+            for m in &sg.members {
+                node_lane.entry(m.as_str()).or_insert(li);
+            }
+        }
+    }
+
+    let nlanes = lanes.len();
+    // groups[lane][rank] = node ids (insertion order).
+    let mut groups: Vec<Vec<Vec<String>>> = vec![vec![Vec::new(); max_rank + 1]; nlanes];
+    for node in &fc.nodes {
+        let li = *node_lane.get(node.id.as_str()).unwrap_or(&0);
+        let r = *rank.get(&node.id).unwrap_or(&0);
+        groups[li][r].push(node.id.clone());
+    }
+
+    // Lane cross-extent = busiest rank in that lane.
+    let lane_rows: Vec<usize> = groups
+        .iter()
+        .map(|g| g.iter().map(|v| v.len()).max().unwrap_or(0).max(1))
+        .collect();
+    let lane_cross: Vec<f64> = lane_rows
+        .iter()
+        .map(|&r| r as f64 * cross_step - SIBLING_GAP + 2.0 * LANE_PAD)
+        .collect();
+
+    // Cross-axis start of each lane band.
+    let mut lane_start = vec![0.0; nlanes];
+    let mut acc = MARGIN;
+    for i in 0..nlanes {
+        lane_start[i] = acc;
+        acc += lane_cross[i];
+    }
+    let cross_end = acc + MARGIN;
+
+    // Main-axis full length (covers the lane title bar + all ranks).
+    let main_full = LANE_TITLE + max_rank as f64 * main_step + main_node + LANE_PAD;
+    let main_total = MARGIN + main_full + MARGIN;
+
+    let mut boxes = HashMap::new();
+    for li in 0..nlanes {
+        for r in 0..=max_rank {
+            let ids = &groups[li][r];
+            let k = ids.len();
+            if k == 0 {
+                continue;
+            }
+            let group_cross = k as f64 * cross_step - SIBLING_GAP;
+            let inner = lane_cross[li] - 2.0 * LANE_PAD;
+            let off = ((inner - group_cross).max(0.0)) / 2.0;
+            for (i, id) in ids.iter().enumerate() {
+                let main_pos = MARGIN + LANE_TITLE + r as f64 * main_step;
+                let cross_pos = lane_start[li] + LANE_PAD + off + i as f64 * cross_step;
+                let (x, y) = if vertical {
+                    (cross_pos, main_pos)
+                } else {
+                    (main_pos, cross_pos)
+                };
+                boxes.insert(
+                    id.clone(),
+                    Box {
+                        x,
+                        y,
+                        w: NODE_W,
+                        h: NODE_H,
+                    },
+                );
+            }
+        }
+    }
+
+    // Flip the main axis for BT / RL.
+    if matches!(fc.direction, Direction::BT | Direction::RL) {
+        for b in boxes.values_mut() {
+            if vertical {
+                b.y = main_total - b.y - b.h;
+            } else {
+                b.x = main_total - b.x - b.w;
+            }
+        }
+    }
+
+    // Lane band geometry (spans the full main axis).
+    let lanes_geom: Vec<LaneGeom> = (0..nlanes)
+        .map(|li| {
+            let b = if vertical {
+                Box {
+                    x: lane_start[li],
+                    y: MARGIN,
+                    w: lane_cross[li],
+                    h: main_full,
+                }
+            } else {
+                Box {
+                    x: MARGIN,
+                    y: lane_start[li],
+                    w: main_full,
+                    h: lane_cross[li],
+                }
+            };
+            LaneGeom {
+                id: lanes[li].clone(),
+                b,
+            }
+        })
+        .collect();
+
+    let (width, height) = if vertical {
+        (cross_end, main_total)
+    } else {
+        (main_total, cross_end)
+    };
+
+    Layout {
+        boxes,
+        lanes: lanes_geom,
+        width: width.max(NODE_W + MARGIN * 2.0),
+        height: height.max(NODE_H + MARGIN * 2.0),
+    }
+}
+
+/// Plain layered layout (no swimlanes).
+fn compute_plain(fc: &Flowchart, rank: &HashMap<String, usize>, max_rank: usize) -> Layout {
     let mut ranks: Vec<Vec<String>> = vec![Vec::new(); max_rank + 1];
     for node in &fc.nodes {
         let r = *rank.get(&node.id).unwrap_or(&0);
@@ -79,9 +250,7 @@ pub fn compute(fc: &Flowchart) -> Layout {
 
     let vertical = fc.direction.is_vertical();
     let widest = ranks.iter().map(|r| r.len()).max().unwrap_or(1).max(1);
-
-    // Cross-axis extent (within a rank) and main-axis extent (across ranks).
-    let cross_span = widest as f64 * (cross_step(vertical));
+    let cross_span = widest as f64 * cross_step(vertical);
     let mut boxes = HashMap::new();
 
     for (r, ids) in ranks.iter().enumerate() {
@@ -104,7 +273,6 @@ pub fn compute(fc: &Flowchart) -> Layout {
         }
     }
 
-    // Flip the main axis for BT / RL so growth runs the requested way.
     let main_extent = MARGIN * 2.0 + (max_rank as f64) * main_step(vertical) + main_box(vertical);
     if matches!(fc.direction, Direction::BT | Direction::RL) {
         for b in boxes.values_mut() {
@@ -124,6 +292,7 @@ pub fn compute(fc: &Flowchart) -> Layout {
 
     Layout {
         boxes,
+        lanes: Vec::new(),
         width: width.max(NODE_W + MARGIN * 2.0),
         height: height.max(NODE_H + MARGIN * 2.0),
     }
@@ -195,5 +364,23 @@ mod tests {
         fc.set_direction(Direction::BT);
         let l = compute(&fc);
         assert!(l.get("a").y > l.get("c").y);
+    }
+
+    #[test]
+    fn swimlanes_form_stacked_bands() {
+        let mut fc = chain();
+        fc.set_direction(Direction::LR);
+        fc.add_subgraph("L1", "Lane 1", vec!["a".into(), "c".into()], ContainerKind::Swimlane, None, None)
+            .unwrap();
+        fc.add_subgraph("L2", "Lane 2", vec!["b".into()], ContainerKind::Swimlane, None, None)
+            .unwrap();
+        let l = compute(&fc);
+        assert_eq!(l.lanes.len(), 2);
+        // Lane 2 sits below lane 1 (stacked on the cross axis).
+        assert!(l.lanes[0].b.y < l.lanes[1].b.y);
+        // Both lanes span the same full main-axis length.
+        assert!((l.lanes[0].b.w - l.lanes[1].b.w).abs() < 1.0);
+        // Node b (lane 2) is in a different cross band than a (lane 1).
+        assert!(l.get("a").y < l.get("b").y);
     }
 }
