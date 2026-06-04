@@ -485,6 +485,8 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
     // Tip for a branch leaving a decision toward `b` (source box `a`).
     // Rear tip a decision receives its single incoming edge on.
     let diamond_entry_tip = |a: Box, b: Box| -> (f64, f64) {
+        // dmain > 0 means the source sits AHEAD of the decision along the flow
+        // (so the edge comes from the front); <= 0 means it comes from behind.
         let dmain = main_of(a) - main_of(b);
         let dcross = cross_of(a) - cross_of(b);
         let rear = if vertical { TOP } else { LEFT };
@@ -492,7 +494,7 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
         let up = if vertical { LEFT } else { TOP };
         let down = if vertical { RIGHT } else { BOTTOM };
         if dmain.abs() >= dcross.abs() {
-            if dmain >= 0.0 { rear } else { front }
+            if dmain <= 0.0 { rear } else { front }
         } else if dcross < 0.0 {
             up
         } else {
