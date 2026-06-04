@@ -323,3 +323,45 @@ fn json_round_trip() {
     s.call("close_flowchart", json!({"handle":h1}));
     s.call("close_flowchart", json!({"handle":h2}));
 }
+
+#[test]
+fn build_document_rejects_unlabeled_decision_branches() {
+    let mut s = Server::start();
+    // A diamond with two unlabeled branches must be rejected.
+    let spec = json!({
+        "pages": [{
+            "nodes": [
+                { "id": "d", "label": "Full / half / empty?", "shape": "diamond" },
+                { "id": "a", "label": "A" },
+                { "id": "b", "label": "B" }
+            ],
+            "edges": [
+                { "from": "d", "to": "a" },
+                { "from": "d", "to": "b" }
+            ]
+        }]
+    });
+    let res = s.call("build_document", spec);
+    assert_eq!(res["status"], "error");
+    assert_eq!(res["category"], "invalid_input");
+
+    // The same decision with labels on every branch is accepted (3-way).
+    let ok = json!({
+        "pages": [{
+            "nodes": [
+                { "id": "d", "label": "Container state?", "shape": "diamond" },
+                { "id": "f", "label": "Full" },
+                { "id": "h", "label": "Half" },
+                { "id": "e", "label": "Empty" }
+            ],
+            "edges": [
+                { "from": "d", "to": "f", "label": "full" },
+                { "from": "d", "to": "h", "label": "half" },
+                { "from": "d", "to": "e", "label": "empty" }
+            ]
+        }]
+    });
+    let res2 = s.call("build_document", ok);
+    assert_eq!(res2["status"], "success");
+    s.call("close_flowchart", json!({"handle": res2["data"]["handle"].as_str().unwrap()}));
+}
