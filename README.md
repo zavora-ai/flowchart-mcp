@@ -67,6 +67,7 @@ export_flowchart { "handle": h, "format": "drawio", "output_path": "login.drawio
 | `import_mermaid` | Parse Mermaid flowchart text into a new document. |
 | `import_json` | Load a full document from `json` export (inline or file) — round-trips every feature. |
 | `build_document` | Build a whole multi-page document (nodes, edges, swimlanes) in **one** call. |
+| `validate_flowchart` | Check the document against correctness properties (labeled decisions, reachability, no overlaps) and return a report. |
 
 ## Batch authoring
 

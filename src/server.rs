@@ -794,6 +794,32 @@ impl FlowchartServer {
         }
         success("Exported pages", json!({ "format": fmt, "count": written.len(), "files": written }))
     }
+
+    #[tool(
+        description = "Validate the document against flowchart correctness properties and return \
+        a report. Checks: decision branches labeled (G1), non-decision steps have <=1 exit (G2), \
+        all nodes reachable from a start and able to reach an end (G3), no node overlaps (L1), \
+        decisions sized for their text (L2). Returns { valid, violation_count, violations[] } \
+        across all pages; does not modify the document."
+    )]
+    async fn validate_flowchart(&self, Parameters(input): Parameters<HandleInput>) -> String {
+        let mut store = self.store.write().await;
+        let Some(doc) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        let mut violations = Vec::new();
+        for (i, page) in doc.pages.iter().enumerate() {
+            crate::engine::validate::check_chart(&page.chart, i, &mut violations);
+        }
+        let items: Vec<_> = violations
+            .iter()
+            .map(|v| json!({ "page": v.page, "property": v.property, "message": v.message }))
+            .collect();
+        success(
+            if violations.is_empty() { "All correctness properties hold" } else { "Validation found issues" },
+            json!({ "valid": violations.is_empty(), "violation_count": violations.len(), "violations": items }),
+        )
+    }
 }
 
 /// Sanitize a page name into a filesystem-safe token.

@@ -170,3 +170,10 @@ description = "Export each page of the document to its own file in an output dir
 risk_class = "local_write"
 requires_approval = false
 credential_bindings = []
+
+[[tools]]
+name = "validate_flowchart"
+description = "Validate the document against flowchart correctness properties (labeled decision branches, reachability, no node overlaps, decision sizing) and return a violation report. Read-only."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []

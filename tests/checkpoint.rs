@@ -81,7 +81,7 @@ fn full_lifecycle() {
     s.send(json!({"jsonrpc":"2.0","id":id,"method":"tools/list","params":{}}));
     let list = s.read_id(id);
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 23, "expected 23 tools");
+    assert_eq!(tools.len(), 24, "expected 24 tools");
 
     // Create a flowchart.
     let created = s.call("create_flowchart", json!({"direction":"TB","title":"Pipeline"}));
@@ -364,4 +364,42 @@ fn build_document_rejects_unlabeled_decision_branches() {
     let res2 = s.call("build_document", ok);
     assert_eq!(res2["status"], "success");
     s.call("close_flowchart", json!({"handle": res2["data"]["handle"].as_str().unwrap()}));
+}
+
+#[test]
+fn validate_flowchart_reports_properties() {
+    let mut s = Server::start();
+    // A clean 3-way decision built via build_document validates cleanly.
+    let built = s.call("build_document", json!({
+        "direction": "LR",
+        "pages": [{
+            "name": "Branch",
+            "lanes": ["Ops"],
+            "nodes": [
+                { "id": "s",  "label": "Start", "shape": "stadium", "lane": "Ops" },
+                { "id": "d",  "label": "Route?", "shape": "diamond", "lane": "Ops" },
+                { "id": "a",  "label": "A", "lane": "Ops" },
+                { "id": "b",  "label": "B", "lane": "Ops" },
+                { "id": "c",  "label": "C", "lane": "Ops" },
+                { "id": "m",  "label": "Merge", "lane": "Ops" },
+                { "id": "e",  "label": "End", "shape": "stadium", "lane": "Ops" }
+            ],
+            "edges": [
+                { "from": "s", "to": "d" },
+                { "from": "d", "to": "a", "label": "x" },
+                { "from": "d", "to": "b", "label": "y" },
+                { "from": "d", "to": "c", "label": "z" },
+                { "from": "a", "to": "m" },
+                { "from": "b", "to": "m" },
+                { "from": "c", "to": "m" },
+                { "from": "m", "to": "e" }
+            ]
+        }]
+    }));
+    let h = built["data"]["handle"].as_str().unwrap().to_string();
+    let rep = s.call("validate_flowchart", json!({"handle": h}));
+    assert_eq!(rep["status"], "success");
+    assert_eq!(rep["data"]["valid"], true, "report: {rep}");
+    assert_eq!(rep["data"]["violation_count"], 0);
+    s.call("close_flowchart", json!({"handle": h}));
 }
