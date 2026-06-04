@@ -63,9 +63,49 @@ export_flowchart { "handle": h, "format": "drawio", "output_path": "login.drawio
 | `add_page` | Add a page to the document and select it. |
 | `select_page` | Select the active page by index. |
 | `export_flowchart` | Export to `drawio`, `mermaid`, `dot`, `svg`, or `json`. |
+| `export_pages` | Export every page to its own file in a directory (configurable name pattern). |
 | `import_mermaid` | Parse Mermaid flowchart text into a new document. |
+| `import_json` | Load a full document from `json` export (inline or file) — round-trips every feature. |
+| `build_document` | Build a whole multi-page document (nodes, edges, swimlanes) in **one** call. |
 
-## Shapes
+## Batch authoring
+
+For large or multi-page diagrams, `build_document` constructs an entire document
+in a single call — no per-node/edge round-trips. Geometry is auto-laid-out, and
+swimlanes are declared per page as a `lanes` list with each node naming its `lane`.
+
+```jsonc
+build_document {
+  "direction": "LR",
+  "pages": [
+    {
+      "name": "Manifest",
+      "title": "1. Manifest Capture",
+      "lanes": ["Manifest Team", "System", "Customer"],
+      "nodes": [
+        { "id": "s",   "label": "Start",          "shape": "stadium",  "lane": "Manifest Team" },
+        { "id": "dec", "label": "Consolidated?",  "shape": "diamond",  "lane": "Manifest Team" },
+        { "id": "job", "label": "Job File No.",   "shape": "document", "lane": "System" }
+      ],
+      "edges": [
+        { "from": "s", "to": "dec" },
+        { "from": "dec", "to": "job", "label": "yes" }
+      ]
+    }
+    // …more pages
+  ]
+}                                   // → { handle, page_count, node_count, edge_count }
+
+export_pages { "handle": h, "format": "drawio", "output_dir": "out",
+               "name_pattern": "{index}-{name}.{ext}" }   // one file per page
+```
+
+`build_document` validates ids, edge endpoints, shapes, and lane membership up
+front, so a bad spec fails cleanly without creating a half-built document.
+`import_json` reloads a document previously saved with `export_flowchart format=json`,
+making JSON a lossless save format for the whole pipeline.
+
+
 
 `rectangle` · `round_rect` · `stadium` · `subroutine` · `cylinder` · `circle` · `double_circle` · `diamond` · `hexagon` · `parallelogram` · `parallelogram_alt` · `trapezoid` · `trapezoid_alt` · `note` · `card` · `document`
 

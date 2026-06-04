@@ -9,10 +9,11 @@ use crate::engine::{
 use crate::error::{category, engine_error, unknown_handle};
 use crate::store::{new_store, Shared};
 use crate::types::inputs::{
-    AddEdgeInput, AddNodeInput, AddPageInput, AddSubgraphInput, CreateInput, ExportInput,
-    HandleInput, ImportMermaidInput, ListStencilsInput, RemoveEdgeInput, RemoveNodeInput,
-    SelectPageInput, SetDirectionInput, SetNodeImageInput, SetNodeStencilInput, StyleEdgeInput,
-    StyleNodeInput, UpdateNodeInput,
+    AddEdgeInput, AddNodeInput, AddPageInput, AddSubgraphInput, BuildDocumentInput, CreateInput,
+    ExportInput, ExportPagesInput, HandleInput, ImportJsonInput, ImportMermaidInput,
+    ListStencilsInput, PageSpec, RemoveEdgeInput, RemoveNodeInput, SelectPageInput,
+    SetDirectionInput, SetNodeImageInput, SetNodeStencilInput, StyleEdgeInput, StyleNodeInput,
+    UpdateNodeInput,
 };
 use crate::types::responses::{error, success};
 
@@ -67,6 +68,126 @@ fn opt_routing(s: &Option<String>) -> Result<Option<EdgeRouting>, String> {
             error(category::INVALID_INPUT, format!("Unknown routing '{v}'"), "Use orthogonal, straight, curved, or entity_relation.")
         }),
     }
+}
+
+/// Build a single page's `Flowchart` from a `PageSpec`. Returns the chart and
+/// the resolved page name. Validates shapes, ids, edge endpoints, and lane
+/// membership; errors are returned as ready-to-send response strings.
+fn build_page_chart(
+    spec: PageSpec,
+    default_dir: Direction,
+    page_index: usize,
+) -> Result<(crate::engine::Flowchart, String), String> {
+    use crate::engine::Flowchart;
+
+    let dir = match spec.direction.as_deref() {
+        None => default_dir,
+        Some(s) => parse_direction(s)?,
+    };
+    let mut fc = Flowchart::new(dir);
+    fc.title = spec.title;
+
+    // Nodes
+    for n in &spec.nodes {
+        let shape = match n.shape.as_deref() {
+            None => Shape::Rectangle,
+            Some(s) => parse_shape(s)?,
+        };
+        let label = n.label.clone().unwrap_or_else(|| n.id.clone());
+        fc.add_node(&n.id, &label, shape).map_err(engine_error)?;
+        if let Some(img) = &n.image {
+            let _ = fc.set_node_image(&n.id, Some(img.clone()));
+        }
+        if let Some(st) = &n.stencil {
+            let _ = fc.set_node_stencil(&n.id, Some(st.clone()));
+        }
+    }
+    // Styles (NodeSpec.style is flattened; clone per node since into_style consumes)
+    for n in spec.nodes.iter() {
+        let style = crate::engine::Style {
+            fill: n.style.fill.clone(),
+            stroke: n.style.stroke.clone(),
+            text_color: n.style.text_color.clone(),
+            stroke_width: n.style.stroke_width,
+            font_family: n.style.font_family.clone(),
+            font_size: n.style.font_size,
+            bold: n.style.bold,
+            italic: n.style.italic,
+            align: n.style.align.clone(),
+            opacity: n.style.opacity,
+            rounded: n.style.rounded,
+            shadow: n.style.shadow,
+            dashed: n.style.dashed,
+        };
+        if !style.is_empty() {
+            let _ = fc.style_node(&n.id, style);
+        }
+    }
+
+    // Edges
+    for e in &spec.edges {
+        let line = match e.line.as_deref() {
+            None => LineStyle::Solid,
+            Some(s) => LineStyle::parse(s).ok_or_else(|| {
+                error(category::INVALID_INPUT, format!("Unknown line style '{s}'"), "Use solid, dotted, or thick.")
+            })?,
+        };
+        let start = opt_arrow(&e.start_arrow)?;
+        let end = opt_arrow(&e.end_arrow)?;
+        let routing = opt_routing(&e.routing)?;
+        let idx = fc
+            .add_edge(&e.from, &e.to, e.label.clone(), line, e.arrow.unwrap_or(true))
+            .map_err(engine_error)?;
+        if start.is_some() || end.is_some() || routing.is_some() || e.color.is_some() {
+            let _ = fc.style_edge(idx, start, end, routing, e.color.clone());
+        }
+    }
+
+    // Swimlanes: one container per lane label, members grouped by node.lane.
+    if !spec.lanes.is_empty() {
+        use std::collections::HashSet;
+        let lane_set: HashSet<&str> = spec.lanes.iter().map(|s| s.as_str()).collect();
+        // Validate every node's lane reference up front.
+        for n in &spec.nodes {
+            match &n.lane {
+                Some(l) if lane_set.contains(l.as_str()) => {}
+                Some(l) => {
+                    return Err(error(
+                        category::INVALID_INPUT,
+                        format!("Node '{}' references unknown lane '{}'", n.id, l),
+                        "Add the lane to the page's `lanes` list or fix the node's `lane`.",
+                    ))
+                }
+                None => {
+                    return Err(error(
+                        category::INVALID_INPUT,
+                        format!("Node '{}' has no lane but the page declares lanes", n.id),
+                        "Give every node a `lane` matching one of the page's `lanes`.",
+                    ))
+                }
+            }
+        }
+        for (li, lane) in spec.lanes.iter().enumerate() {
+            let members: Vec<String> = spec
+                .nodes
+                .iter()
+                .filter(|n| n.lane.as_deref() == Some(lane.as_str()))
+                .map(|n| n.id.clone())
+                .collect();
+            fc.add_subgraph(
+                &format!("lane{li}"),
+                lane,
+                members,
+                ContainerKind::Swimlane,
+                None,
+                None,
+            )
+            .map_err(engine_error)?;
+        }
+    }
+
+    let name = spec.name.unwrap_or_else(|| format!("Page-{}", page_index + 1));
+    Ok((fc, name))
 }
 
 #[tool_router(server_handler)]
@@ -510,4 +631,149 @@ impl FlowchartServer {
             Err(e) => engine_error(e),
         }
     }
+
+    #[tool(
+        description = "Import a full document from JSON (the exact shape produced by \
+        export_flowchart format=json). Provide `json` inline or a `file_path`. Returns a handle. \
+        Round-trips multi-page documents, styles, containers, images, and stencils."
+    )]
+    async fn import_json(&self, Parameters(input): Parameters<ImportJsonInput>) -> String {
+        let src = match (input.json, input.file_path) {
+            (Some(s), _) => s,
+            (None, Some(path)) => match std::fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(e) => return error(category::IO_ERROR, e.to_string(), "Check the file path."),
+            },
+            (None, None) => {
+                return error(category::INVALID_INPUT, "Provide either 'json' or 'file_path'", "Pass the document JSON inline or a path to a .json file.")
+            }
+        };
+        let doc: Document = match serde_json::from_str(&src) {
+            Ok(d) => d,
+            Err(e) => return error(category::PARSE_ERROR, e.to_string(), "Provide JSON matching the export_flowchart format=json shape."),
+        };
+        let pages = doc.pages.len();
+        let (n, e) = {
+            let c = doc.chart_ref();
+            (c.nodes.len(), c.edges.len())
+        };
+        let handle = self.store.write().await.insert(doc);
+        success("Imported JSON document", json!({ "handle": handle, "page_count": pages, "node_count": n, "edge_count": e }))
+    }
+
+    #[tool(
+        description = "Build a complete multi-page document in one call. Each page declares nodes \
+        (id/label/shape/lane), edges (from/to/label/arrows/routing/color), and optional swimlane \
+        `lanes` (stacked bands; every node must name a lane when lanes are present). Geometry is \
+        auto-laid-out. Returns a handle. This replaces hundreds of incremental calls for large \
+        diagrams."
+    )]
+    async fn build_document(&self, Parameters(input): Parameters<BuildDocumentInput>) -> String {
+        let default_dir = match input.direction.as_deref() {
+            None => Direction::TB,
+            Some(s) => match parse_direction(s) {
+                Ok(d) => d,
+                Err(e) => return e,
+            },
+        };
+        if input.pages.is_empty() {
+            return error(category::INVALID_INPUT, "No pages provided", "Provide at least one page in `pages`.");
+        }
+
+        // Build every page chart first so a failure leaves nothing half-created.
+        let mut built: Vec<(crate::engine::Flowchart, String)> = Vec::with_capacity(input.pages.len());
+        for (i, page) in input.pages.into_iter().enumerate() {
+            match build_page_chart(page, default_dir, i) {
+                Ok(pair) => built.push(pair),
+                Err(e) => return e, // already a structured error response
+            }
+        }
+
+        // Assemble the document: first page replaces the initial empty page.
+        let mut doc = Document::new(default_dir);
+        let total_pages = built.len();
+        let mut total_nodes = 0usize;
+        let mut total_edges = 0usize;
+        for (idx, (fc, name)) in built.into_iter().enumerate() {
+            total_nodes += fc.nodes.len();
+            total_edges += fc.edges.len();
+            if idx == 0 {
+                doc.pages[0].name = name;
+                *doc.chart() = fc;
+            } else {
+                doc.pages.push(crate::engine::Page { name, chart: fc });
+            }
+        }
+        doc.current = 0;
+        let handle = self.store.write().await.insert(doc);
+        success(
+            "Built document",
+            json!({ "handle": handle, "page_count": total_pages, "node_count": total_nodes, "edge_count": total_edges }),
+        )
+    }
+
+    #[tool(
+        description = "Export each page of the document to its own file in `output_dir` (created \
+        if missing). format: drawio, mermaid, dot, svg, or json. name_pattern tokens: {index} \
+        (1-based, 2-digit), {name} (page name), {ext}. Default '{index}-{name}.{ext}'. Returns the \
+        list of written files."
+    )]
+    async fn export_pages(&self, Parameters(input): Parameters<ExportPagesInput>) -> String {
+        let fmt = input.format.to_ascii_lowercase();
+        if !matches!(fmt.as_str(), "drawio" | "xml" | "mermaid" | "mmd" | "dot" | "graphviz" | "svg" | "json") {
+            return error(category::INVALID_INPUT, format!("Unknown format '{}'", input.format), "Use drawio, mermaid, dot, svg, or json.");
+        }
+        let ext = export::format_ext(&fmt);
+        let pattern = input.name_pattern.as_deref().unwrap_or("{index}-{name}.{ext}");
+
+        let mut store = self.store.write().await;
+        let Some(doc) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        if let Err(e) = std::fs::create_dir_all(&input.output_dir) {
+            return error(category::IO_ERROR, e.to_string(), "Check the output_dir path and permissions.");
+        }
+
+        let mut written: Vec<String> = Vec::new();
+        for (i, page) in doc.pages.iter().enumerate() {
+            let content = match fmt.as_str() {
+                "drawio" | "xml" => export::to_drawio_page(&page.name, &page.chart),
+                "mermaid" | "mmd" => export::to_mermaid(&page.chart),
+                "dot" | "graphviz" => export::to_dot(&page.chart),
+                "svg" => export::to_svg(&page.chart),
+                "json" => match serde_json::to_string_pretty(&page.chart) {
+                    Ok(s) => s,
+                    Err(e) => return error(category::INVALID_INPUT, e.to_string(), "Could not serialize the page."),
+                },
+                _ => unreachable!(),
+            };
+            let safe_name = sanitize_filename(&page.name);
+            let fname = pattern
+                .replace("{index}", &format!("{:02}", i + 1))
+                .replace("{name}", &safe_name)
+                .replace("{ext}", ext);
+            let path = std::path::Path::new(&input.output_dir).join(&fname);
+            if let Err(e) = std::fs::write(&path, &content) {
+                return error(category::IO_ERROR, e.to_string(), "Check the output_dir path and permissions.");
+            }
+            written.push(path.to_string_lossy().to_string());
+        }
+        success("Exported pages", json!({ "format": fmt, "count": written.len(), "files": written }))
+    }
+}
+
+/// Sanitize a page name into a filesystem-safe token.
+fn sanitize_filename(name: &str) -> String {
+    let mut out: String = name
+        .chars()
+        .map(|c| match c {
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            c if c.is_whitespace() => '-',
+            c => c,
+        })
+        .collect();
+    while out.contains("--") {
+        out = out.replace("--", "-");
+    }
+    out.trim_matches('-').to_string()
 }

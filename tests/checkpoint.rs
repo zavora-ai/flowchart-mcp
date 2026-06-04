@@ -81,7 +81,7 @@ fn full_lifecycle() {
     s.send(json!({"jsonrpc":"2.0","id":id,"method":"tools/list","params":{}}));
     let list = s.read_id(id);
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 20, "expected 20 tools");
+    assert_eq!(tools.len(), 23, "expected 23 tools");
 
     // Create a flowchart.
     let created = s.call("create_flowchart", json!({"direction":"TB","title":"Pipeline"}));
@@ -203,4 +203,123 @@ fn containers_pages_arrows_images() {
     s.call("close_flowchart", json!({"handle":handle}));
     s.call("close_flowchart", json!({"handle":eh}));
     s.call("close_flowchart", json!({"handle":sh}));
+}
+
+#[test]
+fn build_document_and_export_pages() {
+    let mut s = Server::start();
+
+    // Build a 2-page document in a single call, with swimlanes on page 1.
+    let spec = json!({
+        "direction": "LR",
+        "pages": [
+            {
+                "name": "Manifest",
+                "title": "1. Manifest Capture",
+                "lanes": ["Manifest Team", "System"],
+                "nodes": [
+                    { "id": "s",   "label": "Start", "shape": "stadium",  "lane": "Manifest Team" },
+                    { "id": "dec", "label": "Consolidated?", "shape": "diamond", "lane": "Manifest Team" },
+                    { "id": "job", "label": "Job File No.", "shape": "document", "lane": "System" },
+                    { "id": "e",   "label": "End", "shape": "stadium", "lane": "Manifest Team" }
+                ],
+                "edges": [
+                    { "from": "s", "to": "dec" },
+                    { "from": "dec", "to": "job", "label": "Yes" },
+                    { "from": "job", "to": "e" }
+                ]
+            },
+            {
+                "name": "Exit",
+                "title": "2. Exit",
+                "nodes": [
+                    { "id": "a", "label": "A", "shape": "stadium" },
+                    { "id": "b", "label": "B" }
+                ],
+                "edges": [ { "from": "a", "to": "b" } ]
+            }
+        ]
+    });
+    let built = s.call("build_document", spec);
+    assert_eq!(built["status"], "success");
+    assert_eq!(built["data"]["page_count"], 2);
+    assert_eq!(built["data"]["node_count"], 6);
+    let handle = built["data"]["handle"].as_str().unwrap().to_string();
+
+    // Combined export carries both pages, the title banner, and a swimlane band.
+    let combined = s.call("export_flowchart", json!({"handle":handle,"format":"drawio"}));
+    let xml = combined["data"]["content"].as_str().unwrap();
+    assert_eq!(xml.matches("<diagram").count(), 2);
+    assert!(xml.contains("1. Manifest Capture"));
+    assert!(xml.contains("swimlane"));
+    assert!(xml.contains("value=\"Manifest Team\""));
+
+    // Per-page export writes one file per page into a temp dir.
+    let dir = std::env::temp_dir().join(format!("fmcp_pages_{}", std::process::id()));
+    let dir_s = dir.to_string_lossy().to_string();
+    let pages = s.call("export_pages", json!({
+        "handle": handle, "format": "drawio", "output_dir": dir_s
+    }));
+    assert_eq!(pages["status"], "success");
+    assert_eq!(pages["data"]["count"], 2);
+    let files = pages["data"]["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    for f in files {
+        let p = f.as_str().unwrap();
+        assert!(std::path::Path::new(p).exists(), "page file missing: {p}");
+    }
+    // Default pattern is {index}-{name}.{ext}
+    assert!(files[0].as_str().unwrap().contains("01-Manifest.drawio"));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    s.call("close_flowchart", json!({"handle":handle}));
+}
+
+#[test]
+fn build_document_rejects_bad_lane() {
+    let mut s = Server::start();
+    let spec = json!({
+        "pages": [{
+            "lanes": ["A"],
+            "nodes": [ { "id": "x", "label": "X", "lane": "B" } ],
+            "edges": []
+        }]
+    });
+    let res = s.call("build_document", spec);
+    assert_eq!(res["status"], "error");
+    assert_eq!(res["category"], "invalid_input");
+}
+
+#[test]
+fn json_round_trip() {
+    let mut s = Server::start();
+
+    // Build, export to JSON, re-import, and confirm structure survives.
+    let built = s.call("build_document", json!({
+        "direction": "LR",
+        "pages": [{
+            "name": "P1",
+            "nodes": [
+                { "id": "a", "label": "Start", "shape": "stadium" },
+                { "id": "b", "label": "Work" }
+            ],
+            "edges": [ { "from": "a", "to": "b", "label": "go" } ]
+        }]
+    }));
+    let h1 = built["data"]["handle"].as_str().unwrap().to_string();
+    let j = s.call("export_flowchart", json!({"handle":h1,"format":"json"}));
+    let doc_json = j["data"]["content"].as_str().unwrap().to_string();
+
+    let imported = s.call("import_json", json!({"json": doc_json}));
+    assert_eq!(imported["status"], "success");
+    assert_eq!(imported["data"]["node_count"], 2);
+    let h2 = imported["data"]["handle"].as_str().unwrap().to_string();
+
+    // The re-imported doc exports the same node labels.
+    let desc = s.call("describe_flowchart", json!({"handle":h2}));
+    let nodes = desc["data"]["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 2);
+
+    s.call("close_flowchart", json!({"handle":h1}));
+    s.call("close_flowchart", json!({"handle":h2}));
 }
