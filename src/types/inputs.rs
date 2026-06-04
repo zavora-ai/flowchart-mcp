@@ -251,3 +251,109 @@ pub struct ImportMermaidInput {
     /// Path to a file containing Mermaid flowchart text.
     pub file_path: Option<String>,
 }
+
+// ---------------------------------------------------------------------------
+// JSON round-trip + batch authoring
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportJsonInput {
+    /// Document JSON (the exact shape produced by `export_flowchart format=json`).
+    /// Provide this or `file_path`.
+    pub json: Option<String>,
+    /// Path to a `.json` file containing a serialized document.
+    pub file_path: Option<String>,
+}
+
+/// One node in a batch page spec. Geometry is computed by auto-layout; you only
+/// declare the id, label, shape, optional lane membership, image/stencil/style.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NodeSpec {
+    /// Unique node id within the page.
+    pub id: String,
+    /// Display label. Defaults to the id when omitted.
+    pub label: Option<String>,
+    /// Shape name (see add_node). Default rectangle.
+    pub shape: Option<String>,
+    /// Swimlane this node belongs to (must match one of the page's `lanes`).
+    pub lane: Option<String>,
+    /// Optional image path/URI.
+    pub image: Option<String>,
+    /// Optional draw.io stencil key or raw `mxgraph.*` token.
+    pub stencil: Option<String>,
+    #[serde(flatten)]
+    pub style: StyleFields,
+}
+
+/// One edge in a batch page spec.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EdgeSpec {
+    /// Source node id.
+    pub from: String,
+    /// Target node id.
+    pub to: String,
+    /// Optional edge label.
+    pub label: Option<String>,
+    /// Line style: solid (default), dotted, thick.
+    pub line: Option<String>,
+    /// Draw an arrowhead at the target end (default true).
+    pub arrow: Option<bool>,
+    /// Target arrowhead (none/open/block/classic/diamond/oval/cross/er_*).
+    pub end_arrow: Option<String>,
+    /// Source arrowhead (same set as end_arrow).
+    pub start_arrow: Option<String>,
+    /// Routing: orthogonal (default), straight, curved, entity_relation.
+    pub routing: Option<String>,
+    /// Edge color hex.
+    pub color: Option<String>,
+}
+
+/// One page of a batch document build.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PageSpec {
+    /// Optional page name (shown on the draw.io page tab). Defaults to Page-N.
+    pub name: Option<String>,
+    /// Optional in-diagram title banner.
+    pub title: Option<String>,
+    /// Flow direction for this page: TB, BT, LR, RL. Falls back to the
+    /// document-level direction, then TB.
+    pub direction: Option<String>,
+    /// Nodes on the page.
+    pub nodes: Vec<NodeSpec>,
+    /// Edges on the page.
+    #[serde(default)]
+    pub edges: Vec<EdgeSpec>,
+    /// Swimlane labels in stacking order. When non-empty, every node must
+    /// declare a `lane` matching one of these labels.
+    #[serde(default)]
+    pub lanes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BuildDocumentInput {
+    /// Default flow direction for pages that don't set their own: TB (default),
+    /// BT, LR, RL.
+    pub direction: Option<String>,
+    /// Pages to build, in order. The first page replaces the document's
+    /// initial empty page; the rest are appended.
+    pub pages: Vec<PageSpec>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportPagesInput {
+    pub handle: String,
+    /// Export format: drawio, mermaid, dot, svg, or json (one file per page).
+    pub format: String,
+    /// Directory to write page files into (created if missing).
+    pub output_dir: String,
+    /// File name pattern. Tokens: {index} (1-based, zero-padded to 2),
+    /// {name} (page name), {ext} (format extension). Default
+    /// "{index}-{name}.{ext}".
+    pub name_pattern: Option<String>,
+}

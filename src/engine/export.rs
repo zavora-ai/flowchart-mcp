@@ -304,6 +304,26 @@ pub fn to_drawio(doc: &Document) -> String {
     format!("<mxfile host=\"app.diagrams.net\" type=\"device\">\n{diagrams}</mxfile>\n")
 }
 
+/// Render a single page wrapped in a complete `<mxfile>` (for per-page export).
+pub fn to_drawio_page(name: &str, fc: &Flowchart) -> String {
+    format!(
+        "<mxfile host=\"app.diagrams.net\" type=\"device\">\n{}</mxfile>\n",
+        drawio_page(name, fc)
+    )
+}
+
+/// File extension for an export format token.
+pub fn format_ext(format: &str) -> &'static str {
+    match format.to_ascii_lowercase().as_str() {
+        "drawio" | "xml" => "drawio",
+        "mermaid" | "mmd" => "mmd",
+        "dot" | "graphviz" => "dot",
+        "svg" => "svg",
+        "json" => "json",
+        _ => "txt",
+    }
+}
+
 fn drawio_page(name: &str, fc: &Flowchart) -> String {
     let l = layout::compute(fc);
     let mut cells = String::new();
