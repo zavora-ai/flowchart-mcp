@@ -413,12 +413,96 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
         ));
     }
 
+    // --- Edge anchoring for distinct, traceable branches (properties L3/L4) ---
+    // Group edges by source (fan-out) and target (fan-in). For multi-branch
+    // sources/targets we assign each edge a DISTINCT exit/entry face based on the
+    // geometric relationship between the two boxes, so branches never collapse
+    // onto one line and labels never stack.
+    let mut out_edges: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut in_edges: HashMap<&str, Vec<usize>> = HashMap::new();
     for (i, e) in fc.edges.iter().enumerate() {
+        out_edges.entry(e.from.as_str()).or_default().push(i);
+        in_edges.entry(e.to.as_str()).or_default().push(i);
+    }
+
+    let vertical = fc.direction.is_vertical();
+
+    // Distinct anchor points (property L3/L4): for a node with k branch edges we
+    // spread k points along the FORWARD face, ordered by the other end's
+    // cross-axis position so edges fan out in order and never cross or overlap.
+    // exit_index[edge] / entry_index[edge] = (rank, count) on that face.
+    let mut exit_slot: HashMap<usize, (usize, usize)> = HashMap::new();
+    let mut entry_slot: HashMap<usize, (usize, usize)> = HashMap::new();
+    let cross_of = |bx: Box| if vertical { bx.x + bx.w / 2.0 } else { bx.y + bx.h / 2.0 };
+    for (_src, idxs) in out_edges.iter() {
+        if idxs.len() < 2 {
+            continue;
+        }
+        // order this node's outgoing edges by the target's cross position
+        let mut ord: Vec<usize> = idxs.clone();
+        ord.sort_by(|&i, &j| {
+            cross_of(l.get(&fc.edges[i].to))
+                .partial_cmp(&cross_of(l.get(&fc.edges[j].to)))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let n = ord.len();
+        for (rank, &ei) in ord.iter().enumerate() {
+            exit_slot.insert(ei, (rank, n));
+        }
+    }
+    for (_tgt, idxs) in in_edges.iter() {
+        if idxs.len() < 2 {
+            continue;
+        }
+        let mut ord: Vec<usize> = idxs.clone();
+        ord.sort_by(|&i, &j| {
+            cross_of(l.get(&fc.edges[i].from))
+                .partial_cmp(&cross_of(l.get(&fc.edges[j].from)))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let n = ord.len();
+        for (rank, &ei) in ord.iter().enumerate() {
+            entry_slot.insert(ei, (rank, n));
+        }
+    }
+    // Fractional position of slot `rank` of `count` along a face (avoids the
+    // exact corners): 1/(n+1) .. n/(n+1).
+    let frac = |rank: usize, count: usize| (rank as f64 + 1.0) / (count as f64 + 1.0);
+
+    for (i, e) in fc.edges.iter().enumerate() {
+        let mut style = drawio_edge_style(e);
+        let fan_out = exit_slot.contains_key(&i);
+        let fan_in = entry_slot.contains_key(&i);
+
+        // Spread branch exits along the source's forward face at distinct points.
+        if let Some(&(rank, count)) = exit_slot.get(&i) {
+            let f = frac(rank, count);
+            let (ex, ey) = if vertical { (f, 1.0) } else { (1.0, f) };
+            style.push_str(&format!("exitX={ex};exitY={ey};exitDx=0;exitDy=0;"));
+        }
+        // Spread merge entries along the target's incoming face at distinct points.
+        if let Some(&(rank, count)) = entry_slot.get(&i) {
+            let f = frac(rank, count);
+            let (nx, ny) = if vertical { (f, 0.0) } else { (0.0, f) };
+            style.push_str(&format!("entryX={nx};entryY={ny};entryDx=0;entryDy=0;"));
+        }
+
+        // Label placement: bias toward the separated end so it sits on this
+        // branch's own segment, not the shared trunk.
+        let has_label = e.label.as_deref().map(|l| !l.is_empty()).unwrap_or(false);
+        let geom = if has_label && fan_out {
+            "<mxGeometry x=\"-0.55\" relative=\"1\" as=\"geometry\"><mxPoint as=\"offset\"/></mxGeometry>"
+        } else if has_label && fan_in {
+            "<mxGeometry x=\"0.55\" relative=\"1\" as=\"geometry\"><mxPoint as=\"offset\"/></mxGeometry>"
+        } else {
+            "<mxGeometry relative=\"1\" as=\"geometry\"/>"
+        };
+
         cells.push_str(&format!(
             "        <mxCell id=\"edge{i}\" value=\"{}\" style=\"{}\" edge=\"1\" parent=\"1\" \
-             source=\"{}\" target=\"{}\">\n          <mxGeometry relative=\"1\" as=\"geometry\"/>\n        </mxCell>\n",
+             source=\"{}\" target=\"{}\">\n          {geom}\n        </mxCell>\n",
             xml_escape(e.label.as_deref().unwrap_or("")),
-            drawio_edge_style(e),
+            style,
             ident(&e.from),
             ident(&e.to),
         ));
