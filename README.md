@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![ADK-Rust Enterprise](https://img.shields.io/badge/ADK--Rust-Enterprise-purple.svg)](https://enterprise.adk-rust.com)
 
-27 MCP tools for authoring diagrams and exporting them to **draw.io** (diagrams.net mxGraph XML), **Mermaid**, **Graphviz DOT**, **SVG**, and **JSON** — plus **Mermaid import**. Multi-page documents, swimlanes & nested containers, rich node/edge styling, node images, **draw.io stencil libraries** (AWS/Azure/GCP/network/Kubernetes/UML/BPMN), **manual layout & routing overrides** (node position/size, edge waypoints & fixed ports), and ready-made chart types (flowchart, swimlane, org chart, mind map, UML class, ERD, BPMN). Pure Rust, local-first, no external services.
+27 MCP tools for authoring diagrams and exporting them to **draw.io** (diagrams.net mxGraph XML), **Mermaid**, **Graphviz DOT**, **SVG**, **PDF**, and **JSON** — plus **Mermaid import**. Multi-page documents, swimlanes & nested containers, rich node/edge styling, node images, **draw.io stencil libraries** (AWS/Azure/GCP/network/Kubernetes/UML/BPMN), **manual layout & routing overrides** (node position/size, edge waypoints & fixed ports), and ready-made chart types (flowchart, swimlane, org chart, mind map, UML class, ERD, BPMN). Pure Rust, local-first, no external services.
 
 ## Install
 
@@ -65,7 +65,7 @@ export_flowchart { "handle": h, "format": "drawio", "output_path": "login.drawio
 | `add_subgraph` | Group nodes into a container (group/container/swimlane/pool, optionally nested). |
 | `add_page` | Add a page to the document and select it. |
 | `select_page` | Select the active page by index. |
-| `export_flowchart` | Export to `drawio`, `mermaid`, `dot`, `svg`, or `json`. |
+| `export_flowchart` | Export to `drawio`, `mermaid`, `dot`, `svg`, `pdf`, or `json`. |
 | `export_pages` | Export every page to its own file in a directory (configurable name pattern). |
 | `import_mermaid` | Parse Mermaid flowchart text into a new document. |
 | `import_json` | Load a full document from `json` export (inline or file) — round-trips every feature. |
@@ -124,13 +124,15 @@ add_node { "handle": h, "id": "api", "label": "API", "stencil": "aws.api_gateway
 add_node { "handle": h, "id": "db",  "label": "Users", "stencil": "aws.rds" }
 ```
 
-`list_stencils { category?, query? }` browses the curated catalog (friendly keys like `aws.ec2`, `k8s.pod`, `net.firewall`, `uml.actor`). Beyond the catalog, you can pass any raw `mxgraph.<lib>.<name>` token — e.g. `"mxgraph.azure.load_balancer"` — and it is emitted verbatim.
+`list_stencils { category?, query? }` browses the curated catalog of ~160 friendly keys (e.g. `aws.ec2`, `aws.lambda`, `azure.aks`, `gcp.bigquery`, `k8s.statefulset`, `net.firewall`, `uml.actor`, `bpmn.gateway`, `mockup.button`). Beyond the catalog, you can pass any raw `mxgraph.<lib>.<name>` token — e.g. `"mxgraph.azure.load_balancer"` — and it is emitted verbatim.
 
 Stencils render with full fidelity in the **drawio** export (open in diagrams.net). The **svg**/**dot**/**mermaid** exports show a labeled placeholder box instead, since the stencil artwork lives inside draw.io.
 
 ## Styling
 
 `style_node` (and the style fields on `add_node`) accept: `fill`, `stroke`, `text_color` (hex), `stroke_width`, `font_family`, `font_size`, `bold`, `italic`, `align` (`left`/`center`/`right`), `opacity` (0–100), `rounded`, `shadow`, `dashed`. Only provided fields change.
+
+Set `html: true` on `add_node`/`update_node` to treat the label as **rich HTML** (`<b>`, `<i>`, `<br>`, `<font>`…): it renders formatted in the **drawio** export, and tags are stripped to plain text (with `<br>` as spaces) in mermaid/dot/svg/pdf.
 
 ## Edges & arrowheads
 
@@ -176,9 +178,10 @@ These overrides round-trip through the **json** export and render in **drawio** 
 - **mermaid** — `flowchart` source with shapes, edge labels, line styles, subgraphs, and `style` directives.
 - **dot** — Graphviz `digraph` with `rankdir`, clusters, shape mapping, and edge attributes. Render with `dot -Tpng`.
 - **svg** — self-contained SVG using the auto-layout, with arrowheads, dashed/thick edges, images, containers, and shape outlines.
+- **pdf** — single-page **vector** PDF rendered from the same layout (zero-dependency; current page). Binary, so it requires `output_path`. For raster (PNG), open the SVG or drawio export in any viewer.
 - **json** — the raw serialized document (all pages) for programmatic round-tripping.
 
-With `output_path` the content is written to disk; otherwise it is returned inline under `data.content`.
+With `output_path` the content is written to disk; otherwise it is returned inline under `data.content` (PDF always requires `output_path`).
 
 ## Templates
 

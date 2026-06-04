@@ -347,6 +347,9 @@ impl FlowchartServer {
         if let Some(st) = input.stencil {
             let _ = fc.set_node_stencil(&input.id, Some(st));
         }
+        if input.html.is_some() {
+            let _ = fc.set_node_html(&input.id, input.html);
+        }
         let style = input.style.into_style();
         if !style.is_empty() {
             let _ = fc.style_node(&input.id, style);
@@ -354,7 +357,7 @@ impl FlowchartServer {
         success("Added node", json!({ "id": input.id, "node_count": fc.nodes.len() }))
     }
 
-    #[tool(description = "Update a node's label and/or shape.")]
+    #[tool(description = "Update a node's label, shape, and/or html (rich-text) flag.")]
     async fn update_node(&self, Parameters(input): Parameters<UpdateNodeInput>) -> String {
         let shape = match input.shape.as_deref() {
             None => None,
@@ -367,7 +370,11 @@ impl FlowchartServer {
         let Some(doc) = store.get_mut(&input.handle) else {
             return unknown_handle(&input.handle);
         };
-        match doc.chart().update_node(&input.id, input.label.as_deref(), shape) {
+        let fc = doc.chart();
+        if input.html.is_some() {
+            let _ = fc.set_node_html(&input.id, input.html);
+        }
+        match fc.update_node(&input.id, input.label.as_deref(), shape) {
             Ok(()) => success("Updated node", json!({ "id": input.id })),
             Err(e) => engine_error(e),
         }
@@ -679,14 +686,29 @@ impl FlowchartServer {
 
     #[tool(
         description = "Export the document. format: 'drawio' (diagrams.net mxGraph XML, all pages), \
-        'mermaid', 'dot' (Graphviz), 'svg', or 'json'. Mermaid/dot/svg render the current page. \
-        With output_path the content is written to disk; otherwise returned inline under data.content."
+        'mermaid', 'dot' (Graphviz), 'svg', 'pdf' (vector, current page, requires output_path), or \
+        'json'. Mermaid/dot/svg/pdf render the current page. With output_path the content is written \
+        to disk; otherwise returned inline under data.content."
     )]
     async fn export_flowchart(&self, Parameters(input): Parameters<ExportInput>) -> String {
         let mut store = self.store.write().await;
         let Some(doc) = store.get_mut(&input.handle) else {
             return unknown_handle(&input.handle);
         };
+        // PDF is binary (vector); it must be written to a file.
+        if matches!(input.format.to_ascii_lowercase().as_str(), "pdf") {
+            let Some(path) = &input.output_path else {
+                return error(category::INVALID_INPUT, "PDF export requires output_path", "PDF is binary; pass output_path (e.g. \"diagram.pdf\").");
+            };
+            let bytes = crate::engine::pdf::to_pdf(doc.chart_ref());
+            return match std::fs::write(path, &bytes) {
+                Ok(()) => success(
+                    format!("Exported pdf to {path}"),
+                    json!({ "format": "pdf", "output_path": path, "bytes": bytes.len() }),
+                ),
+                Err(e) => error(category::IO_ERROR, e.to_string(), "Check the output path and permissions."),
+            };
+        }
         let content = match input.format.to_ascii_lowercase().as_str() {
             "drawio" | "xml" => export::to_drawio(doc),
             "mermaid" | "mmd" => export::to_mermaid(doc.chart_ref()),
@@ -697,7 +719,7 @@ impl FlowchartServer {
                 Err(e) => return error(category::INVALID_INPUT, e.to_string(), "Could not serialize the document."),
             },
             other => {
-                return error(category::INVALID_INPUT, format!("Unknown format '{other}'"), "Use drawio, mermaid, dot, svg, or json.")
+                return error(category::INVALID_INPUT, format!("Unknown format '{other}'"), "Use drawio, mermaid, dot, svg, pdf, or json.")
             }
         };
         match &input.output_path {

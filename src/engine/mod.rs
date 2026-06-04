@@ -7,11 +7,18 @@
 pub mod export;
 pub mod import;
 pub mod layout;
+pub mod pdf;
 pub mod validate;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::FlowError;
+
+/// Plain-text label for a node (HTML tags stripped when the label is rich).
+/// Shared by the PDF exporter and re-exposed from `export`.
+pub fn export_plain_label(node: &Node) -> String {
+    export::plain_label(node)
+}
 
 /// Flow direction (rank axis + growth orientation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -368,6 +375,11 @@ pub struct Node {
     /// Manual `[width, height]` override.
     #[serde(default)]
     pub size: Option<[f64; 2]>,
+    /// When true, the label is treated as rich HTML (`<b>`, `<i>`, `<br>`,
+    /// `<font>`…): it renders formatted in the drawio export, and tags are
+    /// stripped to plain text (with `<br>` as line breaks) in svg/mermaid/dot.
+    #[serde(default)]
+    pub html: Option<bool>,
 }
 
 /// Edge line rendering.
@@ -504,6 +516,7 @@ impl Flowchart {
             stencil: None,
             pos: None,
             size: None,
+            html: None,
         });
         Ok(())
     }
@@ -548,6 +561,15 @@ impl Flowchart {
             .node_index(id)
             .ok_or_else(|| FlowError::NotFound(format!("node '{id}'")))?;
         self.nodes[idx].stencil = stencil;
+        Ok(())
+    }
+
+    /// Mark a node's label as rich HTML (or clear the flag).
+    pub fn set_node_html(&mut self, id: &str, html: Option<bool>) -> Result<(), FlowError> {
+        let idx = self
+            .node_index(id)
+            .ok_or_else(|| FlowError::NotFound(format!("node '{id}'")))?;
+        self.nodes[idx].html = html;
         Ok(())
     }
 
