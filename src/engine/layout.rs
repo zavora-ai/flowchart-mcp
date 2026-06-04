@@ -1,27 +1,31 @@
-//! Layered auto-layout. Assigns each node a rank (longest path from a source
-//! along edge direction) and an order within the rank, then maps ranks/orders
-//! to pixel coordinates honoring the flow [`Direction`].
+//! Layered auto-layout with content-aware node sizing.
 //!
-//! When the chart contains swimlane containers, layout becomes lane-aware: the
-//! flow runs along the main axis (by rank) while lanes form full-length bands
-//! along the cross axis, with nodes stacked inside their lane. This produces
-//! proper cross-functional diagrams instead of loose boxes.
+//! Each node is measured from its label and shape (a diamond needs ~2x the box
+//! of a rectangle to hold the same text, since a rhombus only fits text in its
+//! centre). Ranks become variable-width columns and lanes become variable-height
+//! bands, so nothing overflows and long labels get room. When the chart has
+//! swimlane containers, layout is lane-aware: the flow runs along the main axis
+//! by rank while lanes form full-length bands on the cross axis.
 
 use std::collections::HashMap;
 
-use super::{ContainerKind, Direction, Flowchart};
+use super::{ContainerKind, Direction, Flowchart, Shape};
 
-/// Default node box size in pixels.
-pub const NODE_W: f64 = 170.0;
-pub const NODE_H: f64 = 60.0;
+/// Fallback / minimum node box size in pixels.
+pub const NODE_W: f64 = 160.0;
+pub const NODE_H: f64 = 56.0;
 /// Gap between adjacent ranks and between siblings within a rank.
 pub const RANK_GAP: f64 = 70.0;
-pub const SIBLING_GAP: f64 = 32.0;
+pub const SIBLING_GAP: f64 = 34.0;
 pub const MARGIN: f64 = 24.0;
 /// Lane title-bar thickness (reserved at the main-axis start of each lane).
 pub const LANE_TITLE: f64 = 30.0;
 /// Cross-axis padding inside a lane band.
-pub const LANE_PAD: f64 = 18.0;
+pub const LANE_PAD: f64 = 20.0;
+
+/// Text metrics for ~12px Helvetica (the export font).
+const CHAR_W: f64 = 7.1;
+const LINE_H: f64 = 16.0;
 
 /// Computed geometry for a node (top-left origin).
 #[derive(Debug, Clone, Copy)]
@@ -59,8 +63,78 @@ impl Layout {
     }
 }
 
-/// Assign ranks by longest path from any source node. Cycles are handled by a
-/// visited guard so each node is relaxed a bounded number of times.
+fn round_up(v: f64, step: f64) -> f64 {
+    (v / step).ceil() * step
+}
+
+/// Greedily word-wrap `label` to a max line width (px); return (widest_line_px,
+/// line_count).
+fn measure_text(label: &str, max_text_w: f64) -> (f64, usize) {
+    let words: Vec<&str> = label.split_whitespace().collect();
+    if words.is_empty() {
+        return (3.0 * CHAR_W, 1);
+    }
+    let space = CHAR_W;
+    let mut lines = 1usize;
+    let mut cur = 0.0f64;
+    let mut widest = 0.0f64;
+    for w in &words {
+        let wl = w.chars().count() as f64 * CHAR_W;
+        if cur > 0.0 && cur + space + wl > max_text_w {
+            widest = widest.max(cur);
+            lines += 1;
+            cur = wl;
+        } else {
+            cur = if cur > 0.0 { cur + space + wl } else { wl };
+        }
+    }
+    widest = widest.max(cur);
+    (widest, lines)
+}
+
+/// Content-aware box size for a node, by shape and label. Rounded to a 10px grid
+/// and clamped to sensible bounds so the diagram stays tidy.
+pub fn node_size(label: &str, shape: Shape) -> (f64, f64) {
+    // Narrower wrap target for shapes whose usable text area is small.
+    let max_text = match shape {
+        Shape::Diamond => 104.0,
+        Shape::Stadium | Shape::Circle | Shape::DoubleCircle => 112.0,
+        _ => 196.0,
+    };
+    let (tw, lines) = measure_text(label, max_text);
+    let th = lines as f64 * LINE_H;
+
+    let (mut w, mut h) = match shape {
+        // Rhombus only fits text in its centre ~50%, so ~2x both axes.
+        Shape::Diamond => (2.0 * tw + 36.0, 2.0 * th + 36.0),
+        // Pills need horizontal room for the rounded caps.
+        Shape::Stadium => (tw + 54.0, th + 26.0),
+        Shape::Circle | Shape::DoubleCircle => {
+            let d = tw.max(th) + 48.0;
+            (d, d)
+        }
+        // Document wave + cylinder ellipses need extra vertical room.
+        Shape::Document => (tw + 34.0, th + 34.0),
+        Shape::Cylinder => (tw + 34.0, th + 40.0),
+        Shape::Hexagon => (tw + 60.0, th + 26.0),
+        Shape::Parallelogram | Shape::ParallelogramAlt => (tw + 56.0, th + 26.0),
+        Shape::Trapezoid | Shape::TrapezoidAlt => (tw + 60.0, th + 26.0),
+        _ => (tw + 34.0, th + 26.0),
+    };
+
+    // Round to a 10px grid and clamp.
+    w = round_up(w, 10.0);
+    h = round_up(h, 10.0);
+    let (min_w, max_w, min_h, max_h) = match shape {
+        Shape::Diamond => (140.0, 300.0, 90.0, 180.0),
+        Shape::Stadium => (90.0, 220.0, 48.0, 120.0),
+        Shape::Circle | Shape::DoubleCircle => (90.0, 200.0, 90.0, 200.0),
+        _ => (120.0, 260.0, 52.0, 170.0),
+    };
+    (w.clamp(min_w, max_w), h.clamp(min_h, max_h))
+}
+
+/// Assign ranks by longest path from any source node.
 fn rank_nodes(fc: &Flowchart) -> HashMap<String, usize> {
     let mut rank: HashMap<String, usize> = fc.nodes.iter().map(|n| (n.id.clone(), 0)).collect();
     let n = fc.nodes.len();
@@ -95,26 +169,49 @@ pub fn compute(fc: &Flowchart) -> Layout {
     let rank = rank_nodes(fc);
     let max_rank = rank.values().copied().max().unwrap_or(0);
     let lanes = lane_ids(fc);
+    let sizes: HashMap<String, (f64, f64)> = fc
+        .nodes
+        .iter()
+        .map(|n| (n.id.clone(), node_size(&n.label, n.shape)))
+        .collect();
+
     if lanes.is_empty() {
-        compute_plain(fc, &rank, max_rank)
+        compute_plain(fc, &rank, max_rank, &sizes)
     } else {
-        compute_laned(fc, &rank, max_rank, &lanes)
+        compute_laned(fc, &rank, max_rank, &lanes, &sizes)
     }
 }
 
-/// Lane-aware layout: flow along the main axis by rank, lanes as cross-axis
-/// bands with nodes stacked inside their lane at each rank.
+fn size_of(sizes: &HashMap<String, (f64, f64)>, id: &str) -> (f64, f64) {
+    sizes.get(id).copied().unwrap_or((NODE_W, NODE_H))
+}
+
+/// Lane-aware variable-size grid: ranks → columns (max main-size per rank),
+/// lanes → bands, sibling rows aligned across ranks (max cross-size per row).
 fn compute_laned(
     fc: &Flowchart,
     rank: &HashMap<String, usize>,
     max_rank: usize,
     lanes: &[String],
+    sizes: &HashMap<String, (f64, f64)>,
 ) -> Layout {
     let vertical = fc.direction.is_vertical();
-    let main_node = if vertical { NODE_H } else { NODE_W };
-    let cross_node = if vertical { NODE_W } else { NODE_H };
-    let main_step = main_node + RANK_GAP;
-    let cross_step = cross_node + SIBLING_GAP;
+    let main_size = |id: &str| {
+        let (w, h) = size_of(sizes, id);
+        if vertical {
+            h
+        } else {
+            w
+        }
+    };
+    let cross_size = |id: &str| {
+        let (w, h) = size_of(sizes, id);
+        if vertical {
+            w
+        } else {
+            h
+        }
+    };
 
     // node id -> lane index (first swimlane that lists it; default 0).
     let mut node_lane: HashMap<&str, usize> = HashMap::new();
@@ -135,62 +232,92 @@ fn compute_laned(
         groups[li][r].push(node.id.clone());
     }
 
-    // Lane cross-extent = busiest rank in that lane.
+    let min_main = if vertical { NODE_H } else { NODE_W };
+    let min_cross = if vertical { NODE_W } else { NODE_H };
+
+    // Column extent per rank = widest node (main axis) across all lanes.
+    let mut rank_extent = vec![min_main; max_rank + 1];
+    for r in 0..=max_rank {
+        let mut m = min_main;
+        for li in 0..nlanes {
+            for id in &groups[li][r] {
+                m = m.max(main_size(id));
+            }
+        }
+        rank_extent[r] = m;
+    }
+
+    // Rows per lane and the cross-extent of each row (aligned across ranks).
     let lane_rows: Vec<usize> = groups
         .iter()
         .map(|g| g.iter().map(|v| v.len()).max().unwrap_or(0).max(1))
         .collect();
-    let lane_cross: Vec<f64> = lane_rows
-        .iter()
-        .map(|&r| r as f64 * cross_step - SIBLING_GAP + 2.0 * LANE_PAD)
-        .collect();
-
-    // Cross-axis start of each lane band.
-    let mut lane_start = vec![0.0; nlanes];
-    let mut acc = MARGIN;
-    for i in 0..nlanes {
-        lane_start[i] = acc;
-        acc += lane_cross[i];
+    let mut row_cross: Vec<Vec<f64>> = Vec::with_capacity(nlanes);
+    for li in 0..nlanes {
+        let mut rows = Vec::with_capacity(lane_rows[li]);
+        for i in 0..lane_rows[li] {
+            let mut m = min_cross;
+            for r in 0..=max_rank {
+                if let Some(id) = groups[li][r].get(i) {
+                    m = m.max(cross_size(id));
+                }
+            }
+            rows.push(m);
+        }
+        row_cross.push(rows);
     }
-    let cross_end = acc + MARGIN;
 
-    // Main-axis full length (covers the lane title bar + all ranks).
-    let main_full = LANE_TITLE + max_rank as f64 * main_step + main_node + LANE_PAD;
-    let main_total = MARGIN + main_full + MARGIN;
+    // Main-axis column positions (after the lane title bar).
+    let mut rank_main = vec![0.0; max_rank + 1];
+    let mut acc = MARGIN + LANE_TITLE;
+    for r in 0..=max_rank {
+        rank_main[r] = acc;
+        acc += rank_extent[r] + RANK_GAP;
+    }
+    let main_content_end = rank_main[max_rank] + rank_extent[max_rank];
+    let main_full = (main_content_end - MARGIN) + LANE_PAD;
+    let main_total = main_content_end + LANE_PAD + MARGIN;
 
+    // Cross-axis lane bands.
+    let lane_cross: Vec<f64> = (0..nlanes)
+        .map(|li| {
+            let rows: f64 = row_cross[li].iter().sum();
+            let gaps = lane_rows[li].saturating_sub(1) as f64 * SIBLING_GAP;
+            rows + gaps + 2.0 * LANE_PAD
+        })
+        .collect();
+    let mut lane_start = vec![0.0; nlanes];
+    let mut acc2 = MARGIN;
+    for li in 0..nlanes {
+        lane_start[li] = acc2;
+        acc2 += lane_cross[li];
+    }
+    let cross_total = acc2 + MARGIN;
+
+    // Place nodes: centred in their (column, row) cell.
     let mut boxes = HashMap::new();
     for li in 0..nlanes {
+        let mut row_start = Vec::with_capacity(lane_rows[li]);
+        let mut ra = lane_start[li] + LANE_PAD;
+        for i in 0..lane_rows[li] {
+            row_start.push(ra);
+            ra += row_cross[li][i] + SIBLING_GAP;
+        }
         for r in 0..=max_rank {
-            let ids = &groups[li][r];
-            let k = ids.len();
-            if k == 0 {
-                continue;
-            }
-            let group_cross = k as f64 * cross_step - SIBLING_GAP;
-            let inner = lane_cross[li] - 2.0 * LANE_PAD;
-            let off = ((inner - group_cross).max(0.0)) / 2.0;
-            for (i, id) in ids.iter().enumerate() {
-                let main_pos = MARGIN + LANE_TITLE + r as f64 * main_step;
-                let cross_pos = lane_start[li] + LANE_PAD + off + i as f64 * cross_step;
+            for (i, id) in groups[li][r].iter().enumerate() {
+                let (w, h) = size_of(sizes, id);
+                let main_pos = rank_main[r] + (rank_extent[r] - main_size(id)) / 2.0;
+                let cross_pos = row_start[i] + (row_cross[li][i] - cross_size(id)) / 2.0;
                 let (x, y) = if vertical {
                     (cross_pos, main_pos)
                 } else {
                     (main_pos, cross_pos)
                 };
-                boxes.insert(
-                    id.clone(),
-                    Box {
-                        x,
-                        y,
-                        w: NODE_W,
-                        h: NODE_H,
-                    },
-                );
+                boxes.insert(id.clone(), Box { x, y, w, h });
             }
         }
     }
 
-    // Flip the main axis for BT / RL.
     if matches!(fc.direction, Direction::BT | Direction::RL) {
         for b in boxes.values_mut() {
             if vertical {
@@ -201,7 +328,6 @@ fn compute_laned(
         }
     }
 
-    // Lane band geometry (spans the full main axis).
     let lanes_geom: Vec<LaneGeom> = (0..nlanes)
         .map(|li| {
             let b = if vertical {
@@ -227,9 +353,9 @@ fn compute_laned(
         .collect();
 
     let (width, height) = if vertical {
-        (cross_end, main_total)
+        (cross_total, main_total)
     } else {
-        (main_total, cross_end)
+        (main_total, cross_total)
     };
 
     Layout {
@@ -240,54 +366,100 @@ fn compute_laned(
     }
 }
 
-/// Plain layered layout (no swimlanes).
-fn compute_plain(fc: &Flowchart, rank: &HashMap<String, usize>, max_rank: usize) -> Layout {
+/// Plain layered layout (no swimlanes), variable sizes, ranks centred on the
+/// cross axis.
+fn compute_plain(
+    fc: &Flowchart,
+    rank: &HashMap<String, usize>,
+    max_rank: usize,
+    sizes: &HashMap<String, (f64, f64)>,
+) -> Layout {
+    let vertical = fc.direction.is_vertical();
+    let main_size = |id: &str| {
+        let (w, h) = size_of(sizes, id);
+        if vertical {
+            h
+        } else {
+            w
+        }
+    };
+    let cross_size = |id: &str| {
+        let (w, h) = size_of(sizes, id);
+        if vertical {
+            w
+        } else {
+            h
+        }
+    };
+
     let mut ranks: Vec<Vec<String>> = vec![Vec::new(); max_rank + 1];
     for node in &fc.nodes {
         let r = *rank.get(&node.id).unwrap_or(&0);
         ranks[r].push(node.id.clone());
     }
 
-    let vertical = fc.direction.is_vertical();
-    let widest = ranks.iter().map(|r| r.len()).max().unwrap_or(1).max(1);
-    let cross_span = widest as f64 * cross_step(vertical);
-    let mut boxes = HashMap::new();
+    let min_main = if vertical { NODE_H } else { NODE_W };
 
-    for (r, ids) in ranks.iter().enumerate() {
-        let count = ids.len().max(1);
-        let used = count as f64 * cross_step(vertical) - cross_gap(vertical);
-        let start = MARGIN + (cross_span - cross_gap(vertical) - used).max(0.0) / 2.0;
-        for (i, id) in ids.iter().enumerate() {
-            let main = MARGIN + r as f64 * main_step(vertical);
-            let cross = start + i as f64 * cross_step(vertical);
-            let (x, y) = if vertical { (cross, main) } else { (main, cross) };
-            boxes.insert(
-                id.clone(),
-                Box {
-                    x,
-                    y,
-                    w: NODE_W,
-                    h: NODE_H,
-                },
-            );
+    // Column extent per rank and total cross span (widest rank's stacked nodes).
+    let mut rank_extent = vec![min_main; max_rank + 1];
+    let mut rank_cross_extent = vec![0.0f64; max_rank + 1];
+    for r in 0..=max_rank {
+        let mut m = min_main;
+        let mut cross = 0.0;
+        for (i, id) in ranks[r].iter().enumerate() {
+            m = m.max(main_size(id));
+            if i > 0 {
+                cross += SIBLING_GAP;
+            }
+            cross += cross_size(id);
+        }
+        rank_extent[r] = m;
+        rank_cross_extent[r] = cross;
+    }
+    let cross_span = rank_cross_extent.iter().cloned().fold(0.0, f64::max);
+
+    let mut rank_main = vec![0.0; max_rank + 1];
+    let mut acc = MARGIN;
+    for r in 0..=max_rank {
+        rank_main[r] = acc;
+        acc += rank_extent[r] + RANK_GAP;
+    }
+    let main_total = if max_rank == 0 && ranks[0].is_empty() {
+        MARGIN * 2.0 + min_main
+    } else {
+        rank_main[max_rank] + rank_extent[max_rank] + MARGIN
+    };
+
+    let mut boxes = HashMap::new();
+    for r in 0..=max_rank {
+        let mut cross_pos = MARGIN + (cross_span - rank_cross_extent[r]).max(0.0) / 2.0;
+        for id in &ranks[r] {
+            let (w, h) = size_of(sizes, id);
+            let main_pos = rank_main[r] + (rank_extent[r] - main_size(id)) / 2.0;
+            let (x, y) = if vertical {
+                (cross_pos, main_pos)
+            } else {
+                (main_pos, cross_pos)
+            };
+            boxes.insert(id.clone(), Box { x, y, w, h });
+            cross_pos += cross_size(id) + SIBLING_GAP;
         }
     }
 
-    let main_extent = MARGIN * 2.0 + (max_rank as f64) * main_step(vertical) + main_box(vertical);
     if matches!(fc.direction, Direction::BT | Direction::RL) {
         for b in boxes.values_mut() {
             if vertical {
-                b.y = main_extent - b.y - b.h;
+                b.y = main_total - b.y - b.h;
             } else {
-                b.x = main_extent - b.x - b.w;
+                b.x = main_total - b.x - b.w;
             }
         }
     }
 
     let (width, height) = if vertical {
-        (cross_span + MARGIN * 2.0, main_extent)
+        (cross_span + MARGIN * 2.0, main_total)
     } else {
-        (main_extent, cross_span + MARGIN * 2.0)
+        (main_total, cross_span + MARGIN * 2.0)
     };
 
     Layout {
@@ -296,32 +468,6 @@ fn compute_plain(fc: &Flowchart, rank: &HashMap<String, usize>, max_rank: usize)
         width: width.max(NODE_W + MARGIN * 2.0),
         height: height.max(NODE_H + MARGIN * 2.0),
     }
-}
-
-fn main_step(vertical: bool) -> f64 {
-    if vertical {
-        NODE_H + RANK_GAP
-    } else {
-        NODE_W + RANK_GAP
-    }
-}
-fn main_box(vertical: bool) -> f64 {
-    if vertical {
-        NODE_H
-    } else {
-        NODE_W
-    }
-}
-fn cross_step(vertical: bool) -> f64 {
-    if vertical {
-        NODE_W + SIBLING_GAP
-    } else {
-        NODE_H + SIBLING_GAP
-    }
-}
-fn cross_gap(vertical: bool) -> f64 {
-    let _ = vertical;
-    SIBLING_GAP
 }
 
 #[cfg(test)]
@@ -376,11 +522,28 @@ mod tests {
             .unwrap();
         let l = compute(&fc);
         assert_eq!(l.lanes.len(), 2);
-        // Lane 2 sits below lane 1 (stacked on the cross axis).
         assert!(l.lanes[0].b.y < l.lanes[1].b.y);
-        // Both lanes span the same full main-axis length.
         assert!((l.lanes[0].b.w - l.lanes[1].b.w).abs() < 1.0);
-        // Node b (lane 2) is in a different cross band than a (lane 1).
         assert!(l.get("a").y < l.get("b").y);
+    }
+
+    #[test]
+    fn diamond_is_larger_than_rectangle_for_same_text() {
+        let label = "Cargo nominated to CFS via?";
+        let (dw, dh) = node_size(label, Shape::Diamond);
+        let (rw, rh) = node_size(label, Shape::Rectangle);
+        // A diamond must be meaningfully bigger to hold the same text.
+        assert!(dw * dh > rw * rh, "diamond {dw}x{dh} should exceed rect {rw}x{rh}");
+        assert!(dh >= 90.0);
+    }
+
+    #[test]
+    fn long_label_widens_box() {
+        let (w_short, _) = node_size("OK", Shape::Rectangle);
+        let (w_long, _) = node_size(
+            "Confirm arrival from KPA site; assign task to port clerks",
+            Shape::Rectangle,
+        );
+        assert!(w_long > w_short);
     }
 }

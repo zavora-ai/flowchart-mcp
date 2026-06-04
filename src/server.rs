@@ -143,6 +143,40 @@ fn build_page_chart(
         }
     }
 
+    // Decision consistency: a decision (diamond) that branches (2+ outgoing
+    // edges) must label every branch. This catches Yes/No and N-way splits
+    // (e.g. full/half/empty) that would otherwise be ambiguous.
+    {
+        use std::collections::HashMap;
+        let decision_ids: std::collections::HashSet<&str> = spec
+            .nodes
+            .iter()
+            .filter(|n| n.shape.as_deref().map(Shape::parse) == Some(Some(Shape::Diamond)))
+            .map(|n| n.id.as_str())
+            .collect();
+        let mut out_counts: HashMap<&str, (usize, usize)> = HashMap::new(); // id -> (total, labeled)
+        for e in &spec.edges {
+            if decision_ids.contains(e.from.as_str()) {
+                let entry = out_counts.entry(e.from.as_str()).or_insert((0, 0));
+                entry.0 += 1;
+                if e.label.as_deref().map(|l| !l.trim().is_empty()).unwrap_or(false) {
+                    entry.1 += 1;
+                }
+            }
+        }
+        for (id, (total, labeled)) in out_counts {
+            if total >= 2 && labeled < total {
+                return Err(error(
+                    category::INVALID_INPUT,
+                    format!(
+                        "Decision '{id}' has {total} outgoing branches but only {labeled} are labeled"
+                    ),
+                    "Label every branch of a decision (e.g. Yes/No, or full/half/empty). Each outgoing edge from a diamond needs a `label`.",
+                ));
+            }
+        }
+    }
+
     // Swimlanes: one container per lane label, members grouped by node.lane.
     if !spec.lanes.is_empty() {
         use std::collections::HashSet;
