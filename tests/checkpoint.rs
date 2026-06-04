@@ -167,7 +167,9 @@ fn containers_pages_arrows_images() {
     let xml = drawio["data"]["content"].as_str().unwrap();
     assert_eq!(xml.matches("<diagram").count(), 2);
     assert!(xml.contains("swimlane"));
-    assert!(xml.contains("parent=\"pool\""));
+    // Swimlanes now render as full-length bands at the root layer (lane label
+    // present), rather than nesting nodes inside the pool cell.
+    assert!(xml.contains("value=\"Lane 1\""));
     assert!(xml.contains("endArrow=diamond"));
     assert!(xml.contains("startArrow=oval"));
     assert!(xml.contains("shape=image"));
