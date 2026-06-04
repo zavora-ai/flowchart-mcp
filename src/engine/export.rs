@@ -588,16 +588,37 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
         if let Some(&(nx, ny)) = entry_anchor.get(&i) {
             style.push_str(&format!("entryX={nx};entryY={ny};entryDx=0;entryDy=0;"));
         }
+        // Explicit fixed ports override the computed anchors.
+        if let Some([ex, ey]) = e.exit {
+            style.push_str(&format!("exitX={ex};exitY={ey};exitDx=0;exitDy=0;"));
+        }
+        if let Some([nx, ny]) = e.entry {
+            style.push_str(&format!("entryX={nx};entryY={ny};entryDx=0;entryDy=0;"));
+        }
+
+        // Manual waypoints, if any, become an explicit points array.
+        let waypoints = if e.waypoints.is_empty() {
+            String::new()
+        } else {
+            let pts: String = e
+                .waypoints
+                .iter()
+                .map(|p| format!("<mxPoint x=\"{:.0}\" y=\"{:.0}\"/>", p[0], p[1] + header))
+                .collect();
+            format!("<Array as=\"points\">{pts}</Array>")
+        };
 
         // Label placement: bias toward the separated end so it sits on this
         // branch's own segment, not the shared trunk.
         let has_label = e.label.as_deref().map(|l| !l.is_empty()).unwrap_or(false);
-        let geom = if has_label && fan_out {
-            "<mxGeometry x=\"-0.5\" relative=\"1\" as=\"geometry\"><mxPoint as=\"offset\"/></mxGeometry>"
+        let geom = if !waypoints.is_empty() {
+            format!("<mxGeometry relative=\"1\" as=\"geometry\">{waypoints}</mxGeometry>")
+        } else if has_label && fan_out {
+            "<mxGeometry x=\"-0.5\" relative=\"1\" as=\"geometry\"><mxPoint as=\"offset\"/></mxGeometry>".to_string()
         } else if has_label && fan_in {
-            "<mxGeometry x=\"0.5\" relative=\"1\" as=\"geometry\"><mxPoint as=\"offset\"/></mxGeometry>"
+            "<mxGeometry x=\"0.5\" relative=\"1\" as=\"geometry\"><mxPoint as=\"offset\"/></mxGeometry>".to_string()
         } else {
-            "<mxGeometry relative=\"1\" as=\"geometry\"/>"
+            "<mxGeometry relative=\"1\" as=\"geometry\"/>".to_string()
         };
 
         cells.push_str(&format!(
@@ -1161,5 +1182,19 @@ mod tests {
         assert!(s.starts_with("<svg"));
         assert!(s.contains("marker id=\"arrow\""));
         assert!(s.contains("polygon"));
+    }
+
+    #[test]
+    fn drawio_emits_fixed_ports_and_waypoints() {
+        let mut fc = sample();
+        fc.route_edge(0, Some(vec![[300.0, 150.0], [300.0, 250.0]]), Some([1.0, 0.5]), Some([0.0, 0.5]), false)
+            .unwrap();
+        let mut doc = Document::new(Direction::TB);
+        *doc.chart() = fc;
+        let x = to_drawio(&doc);
+        assert!(x.contains("exitX=1;exitY=0.5"));
+        assert!(x.contains("entryX=0;entryY=0.5"));
+        assert!(x.contains("<Array as=\"points\">"));
+        assert!(x.contains("<mxPoint x=\"300\""));
     }
 }

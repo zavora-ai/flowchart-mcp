@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![ADK-Rust Enterprise](https://img.shields.io/badge/ADK--Rust-Enterprise-purple.svg)](https://enterprise.adk-rust.com)
 
-20 MCP tools for authoring diagrams and exporting them to **draw.io** (diagrams.net mxGraph XML), **Mermaid**, **Graphviz DOT**, **SVG**, and **JSON** — plus **Mermaid import**. Multi-page documents, swimlanes & nested containers, rich node/edge styling, node images, **draw.io stencil libraries** (AWS/Azure/GCP/network/Kubernetes/UML/BPMN), and ready-made chart types (flowchart, swimlane, org chart, mind map, UML class, ERD, BPMN). Pure Rust, local-first, no external services.
+27 MCP tools for authoring diagrams and exporting them to **draw.io** (diagrams.net mxGraph XML), **Mermaid**, **Graphviz DOT**, **SVG**, and **JSON** — plus **Mermaid import**. Multi-page documents, swimlanes & nested containers, rich node/edge styling, node images, **draw.io stencil libraries** (AWS/Azure/GCP/network/Kubernetes/UML/BPMN), **manual layout & routing overrides** (node position/size, edge waypoints & fixed ports), and ready-made chart types (flowchart, swimlane, org chart, mind map, UML class, ERD, BPMN). Pure Rust, local-first, no external services.
 
 ## Install
 
@@ -55,8 +55,11 @@ export_flowchart { "handle": h, "format": "drawio", "output_path": "login.drawio
 | `set_node_stencil` | Set or clear a node's draw.io stencil (AWS/Azure/GCP/network/k8s/UML/BPMN). |
 | `list_stencils` | Browse/search the built-in draw.io stencil catalog. |
 | `remove_node` | Delete a node and its incident edges. |
-| `add_edge` | Connect two nodes (line, label, arrowheads, routing, color). |
+| `move_node` | Manually place/size a node (x/y/w/h), overriding auto-layout; clear to revert. |
+| `add_edge` | Connect two nodes (line, label, arrowheads, routing, color, fixed ports, waypoints). |
 | `style_edge` | Set start/end arrowheads, routing, and color on an existing edge. |
+| `update_edge` | Change an existing edge's label and/or line style. |
+| `route_edge` | Manually route an edge (waypoints + fixed exit/entry ports); clear to revert. |
 | `remove_edge` | Delete an edge by index. |
 | `set_direction` | Change the current page's flow direction. |
 | `add_subgraph` | Group nodes into a container (group/container/swimlane/pool, optionally nested). |
@@ -151,6 +154,21 @@ Containers nest via `parent`, so a pool of lanes round-trips to draw.io as real 
 ## Pages
 
 A document starts with one page. `add_page` appends a page (and selects it); `select_page` switches the active page. The **drawio** export emits every page as a separate `<diagram>`; **mermaid**/**dot**/**svg** render the current page.
+
+## Manual layout & routing
+
+Layout is automatic by default, but you can pin specifics when you need exact control — the rest of the diagram still auto-lays-out around your overrides, and the canvas grows to fit.
+
+- `move_node` sets a node's top-left `x`/`y` and/or `w`/`h` in canvas pixels; `clear: true` returns it to auto-layout.
+- `route_edge` (or the `exit`/`entry`/`waypoints` fields on `add_edge`) fixes an edge's connection ports and the points it passes through. Ports are `[x, y]` in `0..1` on the source/target box (e.g. `[1.0, 0.5]` = right-middle); waypoints are `[x, y]` canvas pixels. `clear: true` resets to automatic routing.
+
+```jsonc
+move_node  { "handle": h, "id": "db", "x": 640, "y": 80, "w": 200, "h": 90 }
+route_edge { "handle": h, "index": 0, "exit": [1.0, 0.5], "entry": [0.0, 0.5],
+             "waypoints": [[480, 100], [480, 220]] }
+```
+
+These overrides round-trip through the **json** export and render in **drawio** and **svg**.
 
 ## Export formats
 

@@ -145,6 +145,22 @@ pub struct RemoveNodeInput {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct MoveNodeInput {
+    pub handle: String,
+    pub id: String,
+    /// Top-left x (override auto-layout). Provide x and y together.
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    /// Width / height override.
+    pub w: Option<f64>,
+    pub h: Option<f64>,
+    /// Clear any manual override and return the node to auto-layout.
+    #[serde(default)]
+    pub clear: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AddEdgeInput {
     pub handle: String,
     /// Source node id.
@@ -166,6 +182,40 @@ pub struct AddEdgeInput {
     pub routing: Option<String>,
     /// Edge color hex.
     pub color: Option<String>,
+    /// Fixed exit port on the source as [x, y] in 0..1 (e.g. [1.0, 0.5]).
+    pub exit: Option<[f64; 2]>,
+    /// Fixed entry port on the target as [x, y] in 0..1.
+    pub entry: Option<[f64; 2]>,
+    /// Manual routing waypoints [[x, y], ...] in canvas pixels.
+    pub waypoints: Option<Vec<[f64; 2]>>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateEdgeInput {
+    pub handle: String,
+    /// Edge index (see describe_flowchart).
+    pub index: usize,
+    pub label: Option<String>,
+    /// Line style: solid, dotted, or thick.
+    pub line: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RouteEdgeInput {
+    pub handle: String,
+    /// Edge index (see describe_flowchart).
+    pub index: usize,
+    /// Waypoints [[x, y], ...] in canvas pixels.
+    pub waypoints: Option<Vec<[f64; 2]>>,
+    /// Fixed exit port on the source [x, y] in 0..1.
+    pub exit: Option<[f64; 2]>,
+    /// Fixed entry port on the target [x, y] in 0..1.
+    pub entry: Option<[f64; 2]>,
+    /// Clear all manual routing (waypoints + ports) and return to auto.
+    #[serde(default)]
+    pub clear: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
