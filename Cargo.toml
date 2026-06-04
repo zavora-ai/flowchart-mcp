@@ -1,0 +1,26 @@
+[package]
+name = "flowchart-mcp-server"
+version = "0.1.0"
+edition = "2021"
+description = "Flowchart MCP Server — author flowcharts for AI agents and export to draw.io, Mermaid, Graphviz DOT, SVG, and JSON, with Mermaid import"
+license = "Apache-2.0"
+repository = "https://github.com/zavora-ai/flowchart-mcp"
+homepage = "https://zavora.ai"
+keywords = ["mcp", "flowchart", "drawio", "mermaid", "diagram"]
+categories = ["command-line-utilities", "visualization"]
+readme = "README.md"
+exclude = [".cargo/"]
+
+[dependencies]
+rmcp = { version = "1.7", features = ["server", "transport-io", "macros"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+thiserror = "2"
+
+[workspace]

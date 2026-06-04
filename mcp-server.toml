@@ -1,0 +1,151 @@
+server_id = "flowchart_mcp"
+display_name = "Flowchart"
+version = "0.1.0"
+domain = "diagrams"
+sdk_version = "0.1.0"
+risk_level = "low"
+writes_allowed = "yes"
+transports = ["stdio"]
+credentials = []
+governance_gates = []
+environments = ["development", "staging", "production"]
+
+[[tools]]
+name = "create_flowchart"
+description = "Create a new flowchart (direction TB/BT/LR/RL, optional template). Returns a handle."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "list_templates"
+description = "List available flowchart templates for create_flowchart."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "close_flowchart"
+description = "Close a flowchart and free its memory."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "describe_flowchart"
+description = "Describe a flowchart: direction, title, and full node/edge/subgraph listing with edge indexes."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "add_node"
+description = "Add a node with a shape (13 presets) and optional fill/stroke/text_color/stroke_width."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "update_node"
+description = "Update a node's label and/or shape."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "style_node"
+description = "Set a node's visual style (fill/stroke/text_color/stroke_width, font, bold/italic, align, opacity, rounded, shadow, dashed)."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "set_node_image"
+description = "Set or clear a node's image (path or URI), rendering it as an image shape."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "set_node_stencil"
+description = "Set or clear a node's draw.io stencil (catalog key like 'aws.ec2' or raw mxgraph.* token). Renders in the drawio export."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "list_stencils"
+description = "List built-in draw.io stencils (AWS/Azure/GCP/network/Kubernetes/UML/BPMN/mockup), filterable by category and query."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "remove_node"
+description = "Remove a node and every edge touching it."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "add_edge"
+description = "Add a directed edge between two nodes (line solid/dotted/thick, label, arrowheads, routing, color). Returns the edge index."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "style_edge"
+description = "Style an existing edge: start/end arrowheads, routing, and color."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "remove_edge"
+description = "Remove the edge at the given index."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "set_direction"
+description = "Set the current page's flow direction: TB, BT, LR, or RL."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "add_subgraph"
+description = "Group nodes into a container (group/container/swimlane/pool), optionally nested via parent."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "add_page"
+description = "Add a new page to the document and select it."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "select_page"
+description = "Select the active page by 0-based index."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "export_flowchart"
+description = "Export to drawio (mxGraph XML, all pages), mermaid, dot (Graphviz), svg, or json — inline or to a file path."
+risk_class = "local_write"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "import_mermaid"
+description = "Import a Mermaid flowchart (inline source or file path) into a new document. Returns a handle."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
