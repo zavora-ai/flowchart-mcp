@@ -361,6 +361,13 @@ pub struct Node {
     /// drawio export; takes precedence over `shape` there).
     #[serde(default)]
     pub stencil: Option<String>,
+    /// Manual top-left `[x, y]` override. When set, the node is placed here
+    /// instead of by auto-layout.
+    #[serde(default)]
+    pub pos: Option<[f64; 2]>,
+    /// Manual `[width, height]` override.
+    #[serde(default)]
+    pub size: Option<[f64; 2]>,
 }
 
 /// Edge line rendering.
@@ -406,6 +413,15 @@ pub struct Edge {
     /// Stroke color hex.
     #[serde(default)]
     pub color: Option<String>,
+    /// Manual routing waypoints `[[x, y], ...]` the edge passes through.
+    #[serde(default)]
+    pub waypoints: Vec<[f64; 2]>,
+    /// Fixed exit port on the source `[x, y]` in 0..1 (e.g. [1.0, 0.5] = right-middle).
+    #[serde(default)]
+    pub exit: Option<[f64; 2]>,
+    /// Fixed entry port on the target `[x, y]` in 0..1.
+    #[serde(default)]
+    pub entry: Option<[f64; 2]>,
 }
 
 fn default_line() -> LineStyle {
@@ -486,7 +502,34 @@ impl Flowchart {
             style: Style::default(),
             image: None,
             stencil: None,
+            pos: None,
+            size: None,
         });
+        Ok(())
+    }
+
+    /// Set (or clear) a node's manual position/size override.
+    pub fn move_node(
+        &mut self,
+        id: &str,
+        pos: Option<[f64; 2]>,
+        size: Option<[f64; 2]>,
+        clear: bool,
+    ) -> Result<(), FlowError> {
+        let idx = self
+            .node_index(id)
+            .ok_or_else(|| FlowError::NotFound(format!("node '{id}'")))?;
+        if clear {
+            self.nodes[idx].pos = None;
+            self.nodes[idx].size = None;
+            return Ok(());
+        }
+        if pos.is_some() {
+            self.nodes[idx].pos = pos;
+        }
+        if size.is_some() {
+            self.nodes[idx].size = size;
+        }
         Ok(())
     }
 
@@ -575,6 +618,9 @@ impl Flowchart {
             start_arrow: None,
             routing: None,
             color: None,
+            waypoints: Vec::new(),
+            exit: None,
+            entry: None,
         });
         Ok(self.edges.len() - 1)
     }
@@ -603,6 +649,58 @@ impl Flowchart {
         }
         if color.is_some() {
             e.color = color;
+        }
+        Ok(())
+    }
+
+    /// Update an edge's label and/or line style (set fields only).
+    pub fn update_edge(
+        &mut self,
+        index: usize,
+        label: Option<String>,
+        line: Option<LineStyle>,
+    ) -> Result<(), FlowError> {
+        let e = self
+            .edges
+            .get_mut(index)
+            .ok_or_else(|| FlowError::NotFound(format!("edge index {index}")))?;
+        if label.is_some() {
+            e.label = label;
+        }
+        if let Some(l) = line {
+            e.line = l;
+        }
+        Ok(())
+    }
+
+    /// Set manual waypoints and/or fixed exit/entry ports on an edge. With
+    /// `clear`, all three are reset to auto.
+    pub fn route_edge(
+        &mut self,
+        index: usize,
+        waypoints: Option<Vec<[f64; 2]>>,
+        exit: Option<[f64; 2]>,
+        entry: Option<[f64; 2]>,
+        clear: bool,
+    ) -> Result<(), FlowError> {
+        let e = self
+            .edges
+            .get_mut(index)
+            .ok_or_else(|| FlowError::NotFound(format!("edge index {index}")))?;
+        if clear {
+            e.waypoints.clear();
+            e.exit = None;
+            e.entry = None;
+            return Ok(());
+        }
+        if let Some(w) = waypoints {
+            e.waypoints = w;
+        }
+        if exit.is_some() {
+            e.exit = exit;
+        }
+        if entry.is_some() {
+            e.entry = entry;
         }
         Ok(())
     }

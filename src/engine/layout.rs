@@ -180,6 +180,32 @@ pub fn compute(fc: &Flowchart) -> Layout {
     } else {
         compute_laned(fc, &rank, max_rank, &lanes, &sizes)
     }
+    .with_overrides(fc)
+}
+
+impl Layout {
+    /// Apply manual per-node `pos`/`size` overrides on top of the auto-layout,
+    /// then grow the canvas so overridden nodes stay in view.
+    fn with_overrides(mut self, fc: &Flowchart) -> Self {
+        let mut touched = false;
+        for n in &fc.nodes {
+            if n.pos.is_none() && n.size.is_none() {
+                continue;
+            }
+            touched = true;
+            let cur = self.get(&n.id);
+            let (w, h) = n.size.map(|s| (s[0], s[1])).unwrap_or((cur.w, cur.h));
+            let (x, y) = n.pos.map(|p| (p[0], p[1])).unwrap_or((cur.x, cur.y));
+            self.boxes.insert(n.id.clone(), Box { x, y, w, h });
+        }
+        if touched {
+            for b in self.boxes.values() {
+                self.width = self.width.max(b.x + b.w + MARGIN);
+                self.height = self.height.max(b.y + b.h + MARGIN);
+            }
+        }
+        self
+    }
 }
 
 fn size_of(sizes: &HashMap<String, (f64, f64)>, id: &str) -> (f64, f64) {
@@ -545,5 +571,20 @@ mod tests {
             Shape::Rectangle,
         );
         assert!(w_long > w_short);
+    }
+
+    #[test]
+    fn manual_override_wins_and_grows_canvas() {
+        let mut fc = chain();
+        fc.move_node("c", Some([900.0, 700.0]), Some([180.0, 90.0]), false)
+            .unwrap();
+        let l = compute(&fc);
+        let b = l.get("c");
+        assert_eq!((b.x, b.y, b.w, b.h), (900.0, 700.0, 180.0, 90.0));
+        // Canvas grew to include the manually placed node.
+        assert!(l.width >= 900.0 + 180.0);
+        assert!(l.height >= 700.0 + 90.0);
+        // Non-overridden nodes keep auto-layout.
+        assert!(l.get("a").x < 900.0);
     }
 }

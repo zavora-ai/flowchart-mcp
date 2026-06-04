@@ -11,9 +11,9 @@ use crate::store::{new_store, Shared};
 use crate::types::inputs::{
     AddEdgeInput, AddNodeInput, AddPageInput, AddSubgraphInput, BuildDocumentInput, CreateInput,
     ExportInput, ExportPagesInput, HandleInput, ImportJsonInput, ImportMermaidInput,
-    ListStencilsInput, PageSpec, RemoveEdgeInput, RemoveNodeInput, SelectPageInput,
-    SetDirectionInput, SetNodeImageInput, SetNodeStencilInput, StyleEdgeInput, StyleNodeInput,
-    UpdateNodeInput,
+    ListStencilsInput, MoveNodeInput, PageSpec, RemoveEdgeInput, RemoveNodeInput, RouteEdgeInput,
+    SelectPageInput, SetDirectionInput, SetNodeImageInput, SetNodeStencilInput, StyleEdgeInput,
+    StyleNodeInput, UpdateEdgeInput, UpdateNodeInput,
 };
 use crate::types::responses::{error, success};
 
@@ -288,7 +288,7 @@ impl FlowchartServer {
         let nodes: Vec<_> = fc
             .nodes
             .iter()
-            .map(|n| json!({ "id": n.id, "label": n.label, "shape": n.shape.label(), "image": n.image, "stencil": n.stencil }))
+            .map(|n| json!({ "id": n.id, "label": n.label, "shape": n.shape.label(), "image": n.image, "stencil": n.stencil, "pos": n.pos, "size": n.size }))
             .collect();
         let edges: Vec<_> = fc
             .edges
@@ -450,6 +450,39 @@ impl FlowchartServer {
     }
 
     #[tool(
+        description = "Manually place/size a node, overriding auto-layout. Provide `x`+`y` for the \
+        top-left and/or `w`+`h` for the size (canvas pixels); `clear: true` returns it to \
+        auto-layout. Other nodes still auto-lay-out around it; the canvas grows to fit."
+    )]
+    async fn move_node(&self, Parameters(input): Parameters<MoveNodeInput>) -> String {
+        let pos = match (input.x, input.y) {
+            (Some(x), Some(y)) => Some([x, y]),
+            (None, None) => None,
+            _ => {
+                return error(category::INVALID_INPUT, "x and y must be provided together", "Pass both x and y, or neither.")
+            }
+        };
+        let size = match (input.w, input.h) {
+            (Some(w), Some(h)) => Some([w, h]),
+            (None, None) => None,
+            _ => {
+                return error(category::INVALID_INPUT, "w and h must be provided together", "Pass both w and h, or neither.")
+            }
+        };
+        if !input.clear && pos.is_none() && size.is_none() {
+            return error(category::INVALID_INPUT, "Nothing to set", "Provide x+y, w+h, or clear:true.");
+        }
+        let mut store = self.store.write().await;
+        let Some(doc) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        match doc.chart().move_node(&input.id, pos, size, input.clear) {
+            Ok(()) => success("Moved node", json!({ "id": input.id, "cleared": input.clear })),
+            Err(e) => engine_error(e),
+        }
+    }
+
+    #[tool(
         description = "Add a directed edge between two existing nodes. line: solid (default), \
         dotted, thick. arrow: arrowhead at target (default true). Optional end_arrow/start_arrow \
         (none/open/block/classic/diamond/oval/cross/er_one/er_many/...), routing \
@@ -485,6 +518,9 @@ impl FlowchartServer {
                 if start.is_some() || end.is_some() || routing.is_some() || input.color.is_some() {
                     let _ = fc.style_edge(idx, start, end, routing, input.color);
                 }
+                if input.exit.is_some() || input.entry.is_some() || input.waypoints.is_some() {
+                    let _ = fc.route_edge(idx, input.waypoints, input.exit, input.entry, false);
+                }
                 success("Added edge", json!({ "index": idx, "edge_count": fc.edges.len() }))
             }
             Err(e) => engine_error(e),
@@ -517,6 +553,47 @@ impl FlowchartServer {
         };
         match doc.chart().style_edge(input.index, start, end, routing, input.color) {
             Ok(()) => success("Styled edge", json!({ "index": input.index })),
+            Err(e) => engine_error(e),
+        }
+    }
+
+    #[tool(description = "Update an existing edge's label and/or line style (solid/dotted/thick). Only provided fields change.")]
+    async fn update_edge(&self, Parameters(input): Parameters<UpdateEdgeInput>) -> String {
+        let line = match input.line.as_deref() {
+            None => None,
+            Some(s) => match LineStyle::parse(s) {
+                Some(l) => Some(l),
+                None => return error(category::INVALID_INPUT, format!("Unknown line style '{s}'"), "Use solid, dotted, or thick."),
+            },
+        };
+        if input.label.is_none() && line.is_none() {
+            return error(category::INVALID_INPUT, "Nothing to update", "Provide label and/or line.");
+        }
+        let mut store = self.store.write().await;
+        let Some(doc) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        match doc.chart().update_edge(input.index, input.label, line) {
+            Ok(()) => success("Updated edge", json!({ "index": input.index })),
+            Err(e) => engine_error(e),
+        }
+    }
+
+    #[tool(
+        description = "Manually route an edge: `waypoints` ([[x,y],...] canvas pixels) it passes \
+        through, and/or fixed `exit`/`entry` ports ([x,y] in 0..1 on the source/target). \
+        `clear: true` resets to automatic routing."
+    )]
+    async fn route_edge(&self, Parameters(input): Parameters<RouteEdgeInput>) -> String {
+        if !input.clear && input.waypoints.is_none() && input.exit.is_none() && input.entry.is_none() {
+            return error(category::INVALID_INPUT, "Nothing to set", "Provide waypoints, exit, entry, or clear:true.");
+        }
+        let mut store = self.store.write().await;
+        let Some(doc) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        match doc.chart().route_edge(input.index, input.waypoints, input.exit, input.entry, input.clear) {
+            Ok(()) => success("Routed edge", json!({ "index": input.index, "cleared": input.clear })),
             Err(e) => engine_error(e),
         }
     }

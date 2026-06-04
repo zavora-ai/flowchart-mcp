@@ -88,8 +88,15 @@ requires_approval = false
 credential_bindings = []
 
 [[tools]]
+name = "move_node"
+description = "Manually place/size a node (x+y and/or w+h in canvas pixels), overriding auto-layout; clear returns it to auto."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
 name = "add_edge"
-description = "Add a directed edge between two nodes (line solid/dotted/thick, label, arrowheads, routing, color). Returns the edge index."
+description = "Add a directed edge between two nodes (line solid/dotted/thick, label, arrowheads, routing, color, fixed ports, waypoints). Returns the edge index."
 risk_class = "read_only"
 requires_approval = false
 credential_bindings = []
@@ -97,6 +104,20 @@ credential_bindings = []
 [[tools]]
 name = "style_edge"
 description = "Style an existing edge: start/end arrowheads, routing, and color."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "update_edge"
+description = "Update an existing edge's label and/or line style (solid/dotted/thick)."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "route_edge"
+description = "Manually route an edge: waypoints and/or fixed exit/entry ports; clear resets to automatic routing."
 risk_class = "read_only"
 requires_approval = false
 credential_bindings = []

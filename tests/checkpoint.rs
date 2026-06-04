@@ -81,7 +81,7 @@ fn full_lifecycle() {
     s.send(json!({"jsonrpc":"2.0","id":id,"method":"tools/list","params":{}}));
     let list = s.read_id(id);
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 24, "expected 24 tools");
+    assert_eq!(tools.len(), 27, "expected 27 tools");
 
     // Create a flowchart.
     let created = s.call("create_flowchart", json!({"direction":"TB","title":"Pipeline"}));
@@ -402,4 +402,44 @@ fn validate_flowchart_reports_properties() {
     assert_eq!(rep["data"]["valid"], true, "report: {rep}");
     assert_eq!(rep["data"]["violation_count"], 0);
     s.call("close_flowchart", json!({"handle": h}));
+}
+
+#[test]
+fn manual_overrides_and_edit_crud() {
+    let mut s = Server::start();
+    let created = s.call("create_flowchart", json!({"direction":"TB"}));
+    let h = created["data"]["handle"].as_str().unwrap().to_string();
+    s.call("add_node", json!({"handle":h,"id":"a","label":"A","shape":"stadium"}));
+    s.call("add_node", json!({"handle":h,"id":"b","label":"B"}));
+    let e = s.call("add_edge", json!({"handle":h,"from":"a","to":"b","label":"go",
+        "exit":[1.0,0.5],"entry":[0.0,0.5],"waypoints":[[400.0,100.0],[400.0,200.0]]}));
+    assert_eq!(e["status"], "success");
+
+    // Manual node placement overrides auto-layout.
+    let mv = s.call("move_node", json!({"handle":h,"id":"b","x":900.0,"y":600.0,"w":200.0,"h":80.0}));
+    assert_eq!(mv["status"], "success");
+    let desc = s.call("describe_flowchart", json!({"handle":h}));
+    let bnode = desc["data"]["nodes"].as_array().unwrap().iter().find(|n| n["id"]=="b").unwrap();
+    assert_eq!(bnode["pos"][0], 900.0);
+    assert_eq!(bnode["size"][1], 80.0);
+
+    // Edit-CRUD on the edge.
+    let ue = s.call("update_edge", json!({"handle":h,"index":0,"label":"renamed","line":"thick"}));
+    assert_eq!(ue["status"], "success");
+
+    // draw.io export carries ports, waypoints, and the manual box.
+    let xml = s.call("export_flowchart", json!({"handle":h,"format":"drawio"}));
+    let x = xml["data"]["content"].as_str().unwrap();
+    assert!(x.contains("exitX=1;exitY=0.5"));
+    assert!(x.contains("<Array as=\"points\">"));
+    assert!(x.contains("x=\"900\""));
+    assert!(x.contains("value=\"renamed\""));
+
+    // route_edge clear resets manual routing.
+    let rc = s.call("route_edge", json!({"handle":h,"index":0,"clear":true}));
+    assert_eq!(rc["status"], "success");
+    let xml2 = s.call("export_flowchart", json!({"handle":h,"format":"drawio"}));
+    assert!(!xml2["data"]["content"].as_str().unwrap().contains("<Array as=\"points\">"));
+
+    s.call("close_flowchart", json!({"handle":h}));
 }
