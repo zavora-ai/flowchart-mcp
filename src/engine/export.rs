@@ -435,15 +435,20 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
         ));
     }
 
-    // Nodes — absolute coordinates at the root layer (stable, no reflow).
+    // Nodes — absolute coordinates; parented to their layer cell when set.
     for node in &fc.nodes {
         let b = l.get(&node.id);
+        let parent = match &node.layer {
+            Some(lid) if fc.layers.iter().any(|l| &l.id == lid) => ident(lid),
+            _ => "1".to_string(),
+        };
         cells.push_str(&format!(
-            "        <mxCell id=\"{}\" value=\"{}\" style=\"{}\" vertex=\"1\" parent=\"1\">\n          \
+            "        <mxCell id=\"{}\" value=\"{}\" style=\"{}\" vertex=\"1\" parent=\"{}\">\n          \
              <mxGeometry x=\"{:.0}\" y=\"{:.0}\" width=\"{:.0}\" height=\"{:.0}\" as=\"geometry\"/>\n        </mxCell>\n",
             ident(&node.id),
             drawio_node_value(node),
             drawio_node_style(node),
+            parent,
             b.x,
             b.y + header,
             b.w,
@@ -646,10 +651,24 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
             format!("<Array as=\"points\">{pts}</Array>")
         };
 
-        // Label placement: bias toward the separated end so it sits on this
-        // branch's own segment, not the shared trunk.
+        // Explicit label styling (background / border) overrides the default.
+        if let Some(bg) = &e.label_bg {
+            style.push_str(&format!("labelBackgroundColor={bg};"));
+        }
+        if let Some(bd) = &e.label_border {
+            style.push_str(&format!("labelBorderColor={bd};"));
+        }
+
+        // Label placement: explicit label_pos/offset win; else bias toward the
+        // separated end so it sits on this branch's own segment.
         let has_label = e.label.as_deref().map(|l| !l.is_empty()).unwrap_or(false);
-        let geom = if !waypoints.is_empty() {
+        let geom = if e.label_pos.is_some() || e.label_offset.is_some() {
+            let x = e.label_pos.unwrap_or(0.0);
+            let off = e.label_offset.unwrap_or(0.0);
+            format!(
+                "<mxGeometry x=\"{x}\" relative=\"1\" as=\"geometry\"><mxPoint y=\"{off}\" as=\"offset\"/></mxGeometry>"
+            )
+        } else if !waypoints.is_empty() {
             format!("<mxGeometry relative=\"1\" as=\"geometry\">{waypoints}</mxGeometry>")
         } else if has_label && fan_out {
             "<mxGeometry x=\"-0.5\" relative=\"1\" as=\"geometry\"><mxPoint as=\"offset\"/></mxGeometry>".to_string()
@@ -669,12 +688,23 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
         ));
     }
 
+    // Named layers as cells parented to the root (id="0"); hidden → visible="0".
+    let mut layer_cells = String::new();
+    for lyr in &fc.layers {
+        layer_cells.push_str(&format!(
+            "        <mxCell id=\"{}\" value=\"{}\" style=\"\"{} parent=\"0\"/>\n",
+            ident(&lyr.id),
+            xml_escape(&lyr.label),
+            if lyr.visible { "" } else { " visible=\"0\"" },
+        ));
+    }
+
     format!(
         "  <diagram id=\"{}\" name=\"{}\">\n    \
          <mxGraphModel dx=\"{:.0}\" dy=\"{:.0}\" grid=\"1\" gridSize=\"10\" guides=\"1\" \
          tooltips=\"1\" connect=\"1\" arrows=\"1\" fold=\"1\" page=\"1\" pageScale=\"1\" \
          math=\"0\" shadow=\"0\">\n      <root>\n        \
-         <mxCell id=\"0\"/>\n        <mxCell id=\"1\" parent=\"0\"/>\n{cells}      </root>\n    \
+         <mxCell id=\"0\"/>\n        <mxCell id=\"1\" parent=\"0\"/>\n{layer_cells}{cells}      </root>\n    \
          </mxGraphModel>\n  </diagram>\n",
         ident(name),
         xml_escape(name),
@@ -875,6 +905,15 @@ fn push_common(s: &mut String, style: &Style) {
     }
     if style.dashed == Some(true) {
         s.push_str("dashed=1;");
+    }
+    if let Some(g) = &style.gradient {
+        s.push_str(&format!("gradientColor={g};"));
+    }
+    if style.sketch == Some(true) {
+        s.push_str("sketch=1;");
+    }
+    if style.glass == Some(true) {
+        s.push_str("glass=1;");
     }
 }
 
@@ -1352,6 +1391,43 @@ mod tests {
         assert!(x.contains("loopEdgeStyle"));
         let s = to_svg(doc.chart_ref());
         assert!(s.contains("+ id: int"));
+    }
+
+    #[test]
+    fn wave4_styles_layers_labels_in_drawio() {
+        use crate::engine::{Style, Theme};
+        let mut fc = Flowchart::new(Direction::TB);
+        fc.add_node("a", "A", Shape::Rectangle).unwrap();
+        fc.add_node("b", "B", Shape::Rectangle).unwrap();
+        // gradient + sketch + glass on a node.
+        fc.style_node("a", Style {
+            gradient: Some("#7EA6E0".into()),
+            sketch: Some(true),
+            glass: Some(true),
+            ..Default::default()
+        }).unwrap();
+        // a hidden layer with a node on it.
+        fc.add_layer("bg", "Background", false).unwrap();
+        fc.set_node_layer("b", Some("bg".into())).unwrap();
+        // an edge with a positioned, backed label.
+        let i = fc.add_edge("a", "b", Some("go".into()), LineStyle::Solid, true).unwrap();
+        fc.label_edge(i, Some(-0.4), Some(12.0), Some("#FFFFCC".into()), Some("#D6B656".into())).unwrap();
+        // theme recolors nodes.
+        fc.apply_theme(Theme::Green);
+
+        let mut doc = Document::new(Direction::TB);
+        *doc.chart() = fc;
+        let x = to_drawio(&doc);
+        assert!(x.contains("gradientColor=#7EA6E0"));
+        assert!(x.contains("sketch=1"));
+        assert!(x.contains("glass=1"));
+        assert!(x.contains("id=\"bg\" value=\"Background\""));
+        assert!(x.contains("visible=\"0\""));
+        assert!(x.contains("parent=\"bg\""));
+        assert!(x.contains("labelBackgroundColor=#FFFFCC"));
+        assert!(x.contains("labelBorderColor=#D6B656"));
+        // theme green fill applied to a plain node.
+        assert!(x.contains("fillColor=#D5E8D4"));
     }
 
     #[test]

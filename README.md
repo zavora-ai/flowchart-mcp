@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![ADK-Rust Enterprise](https://img.shields.io/badge/ADK--Rust-Enterprise-purple.svg)](https://enterprise.adk-rust.com)
 
-28 MCP tools for authoring diagrams and exporting them to **draw.io** (diagrams.net mxGraph XML), **Mermaid**, **Graphviz DOT**, **SVG**, **PDF**, and **JSON** — plus **Mermaid import**. Multi-page documents, swimlanes & nested containers, rich node/edge styling, node images, **draw.io stencil libraries** (AWS/Azure/GCP/network/Kubernetes/UML/BPMN), **manual layout & routing overrides** (node position/size, edge waypoints & fixed ports), **layered / tree / mind-map auto-layout**, a **true UML class shape** with compartments, self-loop edges, and ready-made chart types (flowchart, swimlane, org chart, mind map, UML class, ERD, BPMN, state machine). Pure Rust, local-first, no external services.
+32 MCP tools for authoring diagrams and exporting them to **draw.io** (diagrams.net mxGraph XML), **Mermaid**, **Graphviz DOT**, **SVG**, **PDF**, and **JSON** — plus **Mermaid import**. Multi-page documents, swimlanes & nested containers, rich node/edge styling, **named themes/palettes**, **gradients & sketch style**, **layers**, node images, **draw.io stencil libraries** (AWS/Azure/GCP/network/Kubernetes/UML/BPMN), **manual layout & routing overrides** (node position/size, edge waypoints & fixed ports, edge label position), **layered / tree / mind-map auto-layout**, a **true UML class shape** with compartments, self-loop edges, and ready-made chart types (flowchart, swimlane, org chart, mind map, UML class, ERD, BPMN, state machine). Pure Rust, local-first, no external services.
 
 ## Install
 
@@ -63,6 +63,10 @@ export_flowchart { "handle": h, "format": "drawio", "output_path": "login.drawio
 | `remove_edge` | Delete an edge by index. |
 | `set_direction` | Change the current page's flow direction. |
 | `set_layout` | Switch auto-layout: `layered` (default), `tree`, or `mind_map`. |
+| `apply_theme` | Recolor the page with a named palette (blue/green/gray/purple/orange/dark). |
+| `add_layer` | Add a named draw.io layer (with visibility). |
+| `set_node_layer` | Assign a node to a layer. |
+| `label_edge` | Position/style an edge's label (along-edge pos, offset, background, border). |
 | `add_subgraph` | Group nodes into a container (group/container/swimlane/pool, optionally nested). |
 | `add_page` | Add a page to the document and select it. |
 | `select_page` | Select the active page by index. |
@@ -133,7 +137,15 @@ Stencils render with full fidelity in the **drawio** export (open in diagrams.ne
 
 ## Styling
 
-`style_node` (and the style fields on `add_node`) accept: `fill`, `stroke`, `text_color` (hex), `stroke_width`, `font_family`, `font_size`, `bold`, `italic`, `align` (`left`/`center`/`right`), `opacity` (0–100), `rounded`, `shadow`, `dashed`. Only provided fields change.
+`style_node` (and the style fields on `add_node`) accept: `fill`, `stroke`, `text_color` (hex), `stroke_width`, `font_family`, `font_size`, `bold`, `italic`, `align` (`left`/`center`/`right`), `opacity` (0–100), `rounded`, `shadow`, `dashed`, `gradient` (end-color hex), `sketch` (hand-drawn), and `glass`. Only provided fields change.
+
+## Themes
+
+`apply_theme` (or the `theme` field on `create_flowchart`) recolors every node and edge with a coordinated palette: `blue` · `green` · `gray` · `purple` · `orange` · `dark`. Terminators/decisions get accent colors; other nodes a matching tint. Apply it last, after building, since it overwrites per-node fill/stroke/text colors.
+
+## Layers
+
+`add_layer` creates a named draw.io layer (with a `visible` flag); `set_node_layer` (or the `layer` field on `add_node`) assigns nodes to it. The **drawio** export emits real layer cells (hidden layers carry `visible="0"`), so you can toggle them in diagrams.net.
 
 Set `html: true` on `add_node`/`update_node` to treat the label as **rich HTML** (`<b>`, `<i>`, `<br>`, `<font>`…): it renders formatted in the **drawio** export, and tags are stripped to plain text (with `<br>` as spaces) in mermaid/dot/svg/pdf.
 

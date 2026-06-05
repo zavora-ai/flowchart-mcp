@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::engine::Style;
 
 /// Reusable visual-style fields shared by add_node and style_node.
-#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct StyleFields {
     /// Fill color hex (e.g. "#DAE8FC").
     pub fill: Option<String>,
@@ -33,6 +33,12 @@ pub struct StyleFields {
     pub shadow: Option<bool>,
     /// Dashed border.
     pub dashed: Option<bool>,
+    /// Gradient end color hex (fills from `fill` to this color).
+    pub gradient: Option<String>,
+    /// Hand-drawn / sketch style.
+    pub sketch: Option<bool>,
+    /// Glossy "glass" overlay.
+    pub glass: Option<bool>,
 }
 
 impl StyleFields {
@@ -51,6 +57,9 @@ impl StyleFields {
             rounded: self.rounded,
             shadow: self.shadow,
             dashed: self.dashed,
+            gradient: self.gradient,
+            sketch: self.sketch,
+            glass: self.glass,
         }
     }
 }
@@ -66,6 +75,54 @@ pub struct CreateInput {
     pub template: Option<String>,
     /// Auto-layout: layered (default), tree, or mind_map.
     pub layout: Option<String>,
+    /// Optional color theme applied after building: blue, green, gray, purple,
+    /// orange, or dark.
+    pub theme: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApplyThemeInput {
+    pub handle: String,
+    /// blue, green, gray, purple, orange, or dark.
+    pub theme: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AddLayerInput {
+    pub handle: String,
+    /// Unique layer id.
+    pub id: String,
+    /// Layer label.
+    pub label: String,
+    /// Whether the layer is visible (default true).
+    pub visible: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetNodeLayerInput {
+    pub handle: String,
+    pub id: String,
+    /// Layer id (must exist). Omit to move the node back to the default layer.
+    pub layer: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LabelEdgeInput {
+    pub handle: String,
+    /// Edge index (see describe_flowchart).
+    pub index: usize,
+    /// Position along the edge in -1..1 (0 = middle).
+    pub pos: Option<f64>,
+    /// Perpendicular offset in pixels.
+    pub offset: Option<f64>,
+    /// Label background color hex (or "none").
+    pub bg: Option<String>,
+    /// Label border color hex.
+    pub border: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -104,6 +161,8 @@ pub struct AddNodeInput {
     /// For shape `uml_class`: compartments below the title, each an array of
     /// member lines (e.g. [["+ name: String"], ["+ save(): void"]]).
     pub compartments: Option<Vec<Vec<String>>>,
+    /// Layer id to place the node on (must exist; see add_layer).
+    pub layer: Option<String>,
     #[serde(flatten)]
     pub style: StyleFields,
 }

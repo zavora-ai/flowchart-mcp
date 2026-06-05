@@ -296,6 +296,12 @@ pub struct Style {
     pub rounded: Option<bool>,
     pub shadow: Option<bool>,
     pub dashed: Option<bool>,
+    /// Gradient end color (hex); fills from `fill` to this color.
+    pub gradient: Option<String>,
+    /// Hand-drawn / sketch style (draw.io rough.js).
+    pub sketch: Option<bool>,
+    /// Glossy "glass" overlay.
+    pub glass: Option<bool>,
 }
 
 impl Style {
@@ -313,6 +319,9 @@ impl Style {
             && self.rounded.is_none()
             && self.shadow.is_none()
             && self.dashed.is_none()
+            && self.gradient.is_none()
+            && self.sketch.is_none()
+            && self.glass.is_none()
     }
 
     /// Overlay `other`'s set fields onto `self`.
@@ -356,6 +365,15 @@ impl Style {
         if other.dashed.is_some() {
             self.dashed = other.dashed;
         }
+        if other.gradient.is_some() {
+            self.gradient = other.gradient;
+        }
+        if other.sketch.is_some() {
+            self.sketch = other.sketch;
+        }
+        if other.glass.is_some() {
+            self.glass = other.glass;
+        }
     }
 }
 
@@ -391,6 +409,10 @@ pub struct Node {
     /// `uml_class` shape.
     #[serde(default)]
     pub compartments: Vec<Vec<String>>,
+    /// Id of the layer this node belongs to (drawio layers). Default layer when
+    /// unset.
+    #[serde(default)]
+    pub layer: Option<String>,
 }
 
 /// Edge line rendering.
@@ -445,6 +467,19 @@ pub struct Edge {
     /// Fixed entry port on the target `[x, y]` in 0..1.
     #[serde(default)]
     pub entry: Option<[f64; 2]>,
+    /// Label position along the edge in `-1..1` (0 = middle, -1 = near source,
+    /// 1 = near target).
+    #[serde(default)]
+    pub label_pos: Option<f64>,
+    /// Label perpendicular offset in pixels.
+    #[serde(default)]
+    pub label_offset: Option<f64>,
+    /// Label background color hex (`none` for transparent).
+    #[serde(default)]
+    pub label_bg: Option<String>,
+    /// Label border color hex.
+    #[serde(default)]
+    pub label_border: Option<String>,
 }
 
 fn default_line() -> LineStyle {
@@ -511,6 +546,103 @@ impl LayoutKind {
     }
 }
 
+/// A named draw.io layer. Nodes reference a layer by id; hidden layers are
+/// emitted with `visible="0"`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Layer {
+    pub id: String,
+    pub label: String,
+    #[serde(default = "default_true")]
+    pub visible: bool,
+}
+
+/// A named color theme applied across a chart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Theme {
+    Blue,
+    Green,
+    Gray,
+    Purple,
+    Orange,
+    Dark,
+}
+
+/// Resolved color set for a theme.
+pub struct Palette {
+    pub node_fill: &'static str,
+    pub node_stroke: &'static str,
+    pub accent_fill: &'static str,
+    pub accent_stroke: &'static str,
+    pub decision_fill: &'static str,
+    pub decision_stroke: &'static str,
+    pub text: &'static str,
+    pub edge: &'static str,
+}
+
+impl Theme {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "blue" | "default" => Some(Self::Blue),
+            "green" => Some(Self::Green),
+            "gray" | "grey" | "mono" => Some(Self::Gray),
+            "purple" => Some(Self::Purple),
+            "orange" => Some(Self::Orange),
+            "dark" | "midnight" => Some(Self::Dark),
+            _ => None,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Blue => "blue",
+            Self::Green => "green",
+            Self::Gray => "gray",
+            Self::Purple => "purple",
+            Self::Orange => "orange",
+            Self::Dark => "dark",
+        }
+    }
+    pub fn palette(self) -> Palette {
+        match self {
+            Self::Blue => Palette {
+                node_fill: "#DAE8FC", node_stroke: "#6C8EBF",
+                accent_fill: "#1F6FB8", accent_stroke: "#15527F",
+                decision_fill: "#FFF2CC", decision_stroke: "#D6B656",
+                text: "#1F2A37", edge: "#44515E",
+            },
+            Self::Green => Palette {
+                node_fill: "#D5E8D4", node_stroke: "#82B366",
+                accent_fill: "#2E7D32", accent_stroke: "#1B5E20",
+                decision_fill: "#FFF2CC", decision_stroke: "#D6B656",
+                text: "#1B3A1B", edge: "#4A6B4A",
+            },
+            Self::Gray => Palette {
+                node_fill: "#F5F5F5", node_stroke: "#999999",
+                accent_fill: "#5A5A5A", accent_stroke: "#333333",
+                decision_fill: "#E8E8E8", decision_stroke: "#999999",
+                text: "#222222", edge: "#666666",
+            },
+            Self::Purple => Palette {
+                node_fill: "#E1D5E7", node_stroke: "#9673A6",
+                accent_fill: "#6A1B9A", accent_stroke: "#4A148C",
+                decision_fill: "#F3E5F5", decision_stroke: "#9673A6",
+                text: "#2E1A33", edge: "#6E5577",
+            },
+            Self::Orange => Palette {
+                node_fill: "#FFE6CC", node_stroke: "#D79B00",
+                accent_fill: "#E65100", accent_stroke: "#BF360C",
+                decision_fill: "#FFF2CC", decision_stroke: "#D6B656",
+                text: "#3A2410", edge: "#8A5A2B",
+            },
+            Self::Dark => Palette {
+                node_fill: "#2D3748", node_stroke: "#1A202C",
+                accent_fill: "#3182CE", accent_stroke: "#2B6CB0",
+                decision_fill: "#4A5568", decision_stroke: "#2D3748",
+                text: "#F7FAFC", edge: "#A0AEC0",
+            },
+        }
+    }
+}
+
 /// The full flowchart document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Flowchart {
@@ -521,6 +653,8 @@ pub struct Flowchart {
     pub subgraphs: Vec<Subgraph>,
     #[serde(default)]
     pub layout: LayoutKind,
+    #[serde(default)]
+    pub layers: Vec<Layer>,
 }
 
 impl Flowchart {
@@ -532,11 +666,67 @@ impl Flowchart {
             edges: Vec::new(),
             subgraphs: Vec::new(),
             layout: LayoutKind::Layered,
+            layers: Vec::new(),
         }
     }
 
     pub fn set_layout(&mut self, layout: LayoutKind) {
         self.layout = layout;
+    }
+
+    /// Add a named layer (or update its label/visibility if it exists).
+    pub fn add_layer(&mut self, id: &str, label: &str, visible: bool) -> Result<(), FlowError> {
+        if id.trim().is_empty() {
+            return Err(FlowError::InvalidInput("layer id must not be empty".into()));
+        }
+        if let Some(l) = self.layers.iter_mut().find(|l| l.id == id) {
+            l.label = label.to_string();
+            l.visible = visible;
+        } else {
+            self.layers.push(Layer {
+                id: id.to_string(),
+                label: label.to_string(),
+                visible,
+            });
+        }
+        Ok(())
+    }
+
+    /// Assign a node to a layer (or clear with `None`). The layer must exist.
+    pub fn set_node_layer(&mut self, id: &str, layer: Option<String>) -> Result<(), FlowError> {
+        if let Some(lid) = &layer {
+            if !self.layers.iter().any(|l| &l.id == lid) {
+                return Err(FlowError::NotFound(format!("layer '{lid}'")));
+            }
+        }
+        let idx = self
+            .node_index(id)
+            .ok_or_else(|| FlowError::NotFound(format!("node '{id}'")))?;
+        self.nodes[idx].layer = layer;
+        Ok(())
+    }
+
+    /// Apply a named color palette to every node (fill + matching stroke) and
+    /// every edge (stroke). Returns the number of nodes restyled.
+    pub fn apply_theme(&mut self, theme: Theme) -> usize {
+        let p = theme.palette();
+        for n in &mut self.nodes {
+            // Terminators/decisions get the accent; others the base tint.
+            let (fill, stroke) = match n.shape {
+                Shape::Stadium | Shape::Circle | Shape::DoubleCircle => (p.accent_fill, p.accent_stroke),
+                Shape::Diamond => (p.decision_fill, p.decision_stroke),
+                _ => (p.node_fill, p.node_stroke),
+            };
+            n.style.fill = Some(fill.to_string());
+            n.style.stroke = Some(stroke.to_string());
+            n.style.text_color = Some(p.text.to_string());
+        }
+        for e in &mut self.edges {
+            if e.color.is_none() {
+                e.color = Some(p.edge.to_string());
+            }
+        }
+        self.nodes.len()
     }
 
     fn node_index(&self, id: &str) -> Option<usize> {
@@ -566,6 +756,7 @@ impl Flowchart {
             size: None,
             html: None,
             compartments: Vec::new(),
+            layer: None,
         });
         Ok(())
     }
@@ -719,6 +910,10 @@ impl Flowchart {
             waypoints: Vec::new(),
             exit: None,
             entry: None,
+            label_pos: None,
+            label_offset: None,
+            label_bg: None,
+            label_border: None,
         });
         Ok(self.edges.len() - 1)
     }
@@ -799,6 +994,34 @@ impl Flowchart {
         }
         if entry.is_some() {
             e.entry = entry;
+        }
+        Ok(())
+    }
+
+    /// Set edge label placement/style (set fields only).
+    pub fn label_edge(
+        &mut self,
+        index: usize,
+        pos: Option<f64>,
+        offset: Option<f64>,
+        bg: Option<String>,
+        border: Option<String>,
+    ) -> Result<(), FlowError> {
+        let e = self
+            .edges
+            .get_mut(index)
+            .ok_or_else(|| FlowError::NotFound(format!("edge index {index}")))?;
+        if pos.is_some() {
+            e.label_pos = pos;
+        }
+        if offset.is_some() {
+            e.label_offset = offset;
+        }
+        if bg.is_some() {
+            e.label_bg = bg;
+        }
+        if border.is_some() {
+            e.label_border = border;
         }
         Ok(())
     }

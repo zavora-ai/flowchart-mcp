@@ -144,6 +144,34 @@ requires_approval = false
 credential_bindings = []
 
 [[tools]]
+name = "apply_theme"
+description = "Apply a named color palette (blue/green/gray/purple/orange/dark) to every node and edge."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "add_layer"
+description = "Add a named drawio layer (with visibility) to the current page."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "set_node_layer"
+description = "Assign a node to a layer (or clear to the default layer)."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "label_edge"
+description = "Position/style an edge's label: pos along the edge, perpendicular offset, background and border colors."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
 name = "add_subgraph"
 description = "Group nodes into a container (group/container/swimlane/pool), optionally nested via parent."
 risk_class = "read_only"

@@ -81,7 +81,7 @@ fn full_lifecycle() {
     s.send(json!({"jsonrpc":"2.0","id":id,"method":"tools/list","params":{}}));
     let list = s.read_id(id);
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 28, "expected 28 tools");
+    assert_eq!(tools.len(), 32, "expected 32 tools");
 
     // Create a flowchart.
     let created = s.call("create_flowchart", json!({"direction":"TB","title":"Pipeline"}));
@@ -523,4 +523,48 @@ fn wave3_uml_tree_state() {
 
     s.call("close_flowchart", json!({"handle":h}));
     s.call("close_flowchart", json!({"handle":smh}));
+}
+
+#[test]
+fn wave4_themes_layers_styles() {
+    let mut s = Server::start();
+
+    // Theme on create.
+    let created = s.call("create_flowchart", json!({"direction":"TB","theme":"purple"}));
+    let h = created["data"]["handle"].as_str().unwrap().to_string();
+    s.call("add_node", json!({"handle":h,"id":"a","label":"A","gradient":"#B5739D","sketch":true,"glass":true}));
+    s.call("add_node", json!({"handle":h,"id":"b","label":"B"}));
+
+    // Layer + assignment.
+    let al = s.call("add_layer", json!({"handle":h,"id":"bg","label":"Background","visible":false}));
+    assert_eq!(al["status"], "success");
+    let sl = s.call("set_node_layer", json!({"handle":h,"id":"b","layer":"bg"}));
+    assert_eq!(sl["status"], "success");
+
+    // Edge label positioning.
+    let e = s.call("add_edge", json!({"handle":h,"from":"a","to":"b","label":"go"}));
+    assert_eq!(e["status"], "success");
+    let le = s.call("label_edge", json!({"handle":h,"index":0,"pos":-0.5,"offset":10.0,"bg":"#FFFFCC","border":"#D6B656"}));
+    assert_eq!(le["status"], "success");
+
+    // apply_theme re-themes the whole page.
+    let at = s.call("apply_theme", json!({"handle":h,"theme":"green"}));
+    assert_eq!(at["status"], "success");
+    assert!(at["data"]["nodes_restyled"].as_u64().unwrap() >= 2);
+
+    // describe reports layers.
+    let desc = s.call("describe_flowchart", json!({"handle":h}));
+    assert_eq!(desc["data"]["layers"].as_array().unwrap().len(), 1);
+
+    // drawio export carries gradient/sketch/glass, hidden layer, label bg.
+    let xml = s.call("export_flowchart", json!({"handle":h,"format":"drawio"}));
+    let x = xml["data"]["content"].as_str().unwrap();
+    assert!(x.contains("gradientColor=#B5739D"));
+    assert!(x.contains("sketch=1"));
+    assert!(x.contains("visible=\"0\""));
+    assert!(x.contains("parent=\"bg\""));
+    assert!(x.contains("labelBackgroundColor=#FFFFCC"));
+    assert!(x.contains("fillColor=#D5E8D4")); // green theme
+
+    s.call("close_flowchart", json!({"handle":h}));
 }
