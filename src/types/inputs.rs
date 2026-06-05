@@ -458,6 +458,9 @@ pub struct PageSpec {
     /// declare a `lane` matching one of these labels.
     #[serde(default)]
     pub lanes: Vec<String>,
+    /// When true, stamp sequential step-number badges on this page's steps.
+    #[serde(default)]
+    pub number_steps: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -466,9 +469,22 @@ pub struct BuildDocumentInput {
     /// Default flow direction for pages that don't set their own: TB (default),
     /// BT, LR, RL.
     pub direction: Option<String>,
+    /// When true, stamp sequential step-number badges on every page's steps
+    /// (a page may override via its own `number_steps`).
+    #[serde(default)]
+    pub number_steps: Option<bool>,
     /// Pages to build, in order. The first page replaces the document's
     /// initial empty page; the rest are appended.
     pub pages: Vec<PageSpec>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetStepNumberingInput {
+    pub handle: String,
+    /// When true, the drawio export stamps sequential step-number badges on the
+    /// current page's steps (process/decision/document; terminators skipped).
+    pub enabled: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

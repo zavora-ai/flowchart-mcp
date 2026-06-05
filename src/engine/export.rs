@@ -435,6 +435,14 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
         ));
     }
 
+    // Step numbering (optional): a sequential number on each "step" node
+    // (process/document/decision — not start/end terminators) in flow order.
+    let step_numbers: HashMap<&str, usize> = if fc.number_steps {
+        number_steps(fc)
+    } else {
+        HashMap::new()
+    };
+
     // Nodes — absolute coordinates; parented to their layer cell when set.
     for node in &fc.nodes {
         let b = l.get(&node.id);
@@ -454,9 +462,26 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
             b.w,
             b.h,
         ));
-    }
 
-    // --- Edge anchoring for distinct, traceable branches (properties L3/L4) ---
+        // Step-number badge: a small numbered circle pinned to the node's top.
+        if let Some(&num) = step_numbers.get(node.id.as_str()) {
+            let bw = 22.0;
+            let bx = b.x + b.w - bw / 2.0 - 6.0;
+            let by = b.y + header - bw / 2.0 + 6.0;
+            cells.push_str(&format!(
+                "        <mxCell id=\"{}_badge\" value=\"{}\" style=\"ellipse;whiteSpace=wrap;html=1;\
+                 fillColor=#1F2A37;strokeColor=#FFFFFF;fontColor=#FFFFFF;fontStyle=1;fontSize=11;\
+                 verticalAlign=middle;align=center;\" vertex=\"1\" parent=\"1\">\n          \
+                 <mxGeometry x=\"{:.0}\" y=\"{:.0}\" width=\"{:.0}\" height=\"{:.0}\" as=\"geometry\"/>\n        </mxCell>\n",
+                ident(&node.id),
+                num,
+                bx,
+                by,
+                bw,
+                bw,
+            ));
+        }
+    }
     // Group edges by source (fan-out) and target (fan-in).
     let mut out_edges: HashMap<&str, Vec<usize>> = HashMap::new();
     let mut in_edges: HashMap<&str, Vec<usize>> = HashMap::new();
@@ -713,6 +738,83 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
         (l.width + 40.0).max(800.0),
         (l.height + header + 40.0).max(600.0),
     )
+}
+
+/// Assign sequential step numbers (1-based) to step nodes in flow order.
+/// Terminators (stadium start/end) are skipped — they are not "steps".
+/// Ordering: BFS from start terminators (or, lacking any, the first node),
+/// which follows the reading order of the flow; ties fall back to node order.
+fn number_steps(fc: &Flowchart) -> HashMap<&str, usize> {
+    use std::collections::{HashSet, VecDeque};
+
+    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut indeg: HashMap<&str, usize> = fc.nodes.iter().map(|n| (n.id.as_str(), 0)).collect();
+    for e in &fc.edges {
+        adj.entry(e.from.as_str()).or_default().push(e.to.as_str());
+        *indeg.entry(e.to.as_str()).or_insert(0) += 1;
+    }
+
+    // Seeds: start terminators with no incoming edge, else any zero-indegree
+    // node, else the first node. Preserve declaration order among seeds.
+    let mut seeds: Vec<&str> = fc
+        .nodes
+        .iter()
+        .filter(|n| n.shape == Shape::Stadium && indeg.get(n.id.as_str()).copied().unwrap_or(0) == 0)
+        .map(|n| n.id.as_str())
+        .collect();
+    if seeds.is_empty() {
+        seeds = fc
+            .nodes
+            .iter()
+            .filter(|n| indeg.get(n.id.as_str()).copied().unwrap_or(0) == 0)
+            .map(|n| n.id.as_str())
+            .collect();
+    }
+    if seeds.is_empty() {
+        if let Some(n) = fc.nodes.first() {
+            seeds.push(n.id.as_str());
+        }
+    }
+
+    let is_step = |id: &str| {
+        fc.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.shape != Shape::Stadium)
+            .unwrap_or(false)
+    };
+
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut queue: VecDeque<&str> = VecDeque::new();
+    for s in &seeds {
+        if visited.insert(s) {
+            queue.push_back(s);
+        }
+    }
+    let mut numbers: HashMap<&str, usize> = HashMap::new();
+    let mut counter = 0usize;
+    while let Some(u) = queue.pop_front() {
+        if is_step(u) {
+            counter += 1;
+            numbers.insert(u, counter);
+        }
+        if let Some(succ) = adj.get(u) {
+            for &v in succ {
+                if visited.insert(v) {
+                    queue.push_back(v);
+                }
+            }
+        }
+    }
+    // Any node not reached by BFS (disconnected) still gets a number in
+    // declaration order so nothing is left unlabeled.
+    for n in &fc.nodes {
+        if n.shape != Shape::Stadium && !numbers.contains_key(n.id.as_str()) {
+            counter += 1;
+            numbers.insert(n.id.as_str(), counter);
+        }
+    }
+    numbers
 }
 
 /// Swimlane band style. Title bar on the left for horizontal flow (LR/RL),

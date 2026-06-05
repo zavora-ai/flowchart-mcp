@@ -81,7 +81,7 @@ fn full_lifecycle() {
     s.send(json!({"jsonrpc":"2.0","id":id,"method":"tools/list","params":{}}));
     let list = s.read_id(id);
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 39, "expected 39 tools");
+    assert_eq!(tools.len(), 40, "expected 40 tools");
 
     // Create a flowchart.
     let created = s.call("create_flowchart", json!({"direction":"TB","title":"Pipeline"}));
@@ -617,4 +617,48 @@ fn sequence_diagram_lifecycle() {
     assert_eq!(cross["status"], "error");
 
     s.call("close_sequence", json!({"handle":h}));
+}
+
+#[test]
+fn step_numbering_stamps_badges() {
+    let mut s = Server::start();
+    // build_document with number_steps stamps numbered badges on steps only.
+    let built = s.call("build_document", json!({
+        "direction": "LR",
+        "number_steps": true,
+        "pages": [{
+            "name": "Numbered",
+            "nodes": [
+                { "id": "s", "label": "Start", "shape": "stadium" },
+                { "id": "a", "label": "Step A" },
+                { "id": "b", "label": "Step B" },
+                { "id": "e", "label": "End", "shape": "stadium" }
+            ],
+            "edges": [
+                { "from": "s", "to": "a" },
+                { "from": "a", "to": "b" },
+                { "from": "b", "to": "e" }
+            ]
+        }]
+    }));
+    let h = built["data"]["handle"].as_str().unwrap().to_string();
+    let drawio = s.call("export_flowchart", json!({"handle":h,"format":"drawio"}));
+    let xml = drawio["data"]["content"].as_str().unwrap();
+    // Two step badges (a, b) — start/end are not numbered.
+    assert_eq!(xml.matches("_badge\"").count(), 2, "expected 2 step badges");
+    assert!(xml.contains("value=\"1\""));
+    assert!(xml.contains("value=\"2\""));
+    s.call("close_flowchart", json!({"handle":h}));
+
+    // set_step_numbering toggles it on an incrementally-built chart.
+    let c = s.call("create_flowchart", json!({"direction":"LR"}));
+    let h2 = c["data"]["handle"].as_str().unwrap().to_string();
+    s.call("add_node", json!({"handle":h2,"id":"x","label":"X"}));
+    s.call("add_node", json!({"handle":h2,"id":"y","label":"Y"}));
+    s.call("add_edge", json!({"handle":h2,"from":"x","to":"y"}));
+    let toggled = s.call("set_step_numbering", json!({"handle":h2,"enabled":true}));
+    assert_eq!(toggled["data"]["number_steps"], true);
+    let dx = s.call("export_flowchart", json!({"handle":h2,"format":"drawio"}));
+    assert!(dx["data"]["content"].as_str().unwrap().contains("_badge\""));
+    s.call("close_flowchart", json!({"handle":h2}));
 }

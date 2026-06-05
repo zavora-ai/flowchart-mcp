@@ -144,6 +144,13 @@ requires_approval = false
 credential_bindings = []
 
 [[tools]]
+name = "set_step_numbering"
+description = "Enable or disable sequential step-number badges on the current page (numbered process map). Start/End terminators are not numbered."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
 name = "apply_theme"
 description = "Apply a named color palette (blue/green/gray/purple/orange/dark) to every node and edge."
 risk_class = "read_only"

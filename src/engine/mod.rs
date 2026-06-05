@@ -655,6 +655,10 @@ pub struct Flowchart {
     pub layout: LayoutKind,
     #[serde(default)]
     pub layers: Vec<Layer>,
+    /// When true, the draw.io export stamps a small sequential badge on each
+    /// step (in flow order), like a numbered process map.
+    #[serde(default)]
+    pub number_steps: bool,
 }
 
 impl Flowchart {
@@ -667,6 +671,7 @@ impl Flowchart {
             subgraphs: Vec::new(),
             layout: LayoutKind::Layered,
             layers: Vec::new(),
+            number_steps: false,
         }
     }
 
