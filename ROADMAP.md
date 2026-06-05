@@ -11,11 +11,11 @@ Effort: S = <½ day · M = ~1 day · L = multi-day.
 | 4 | PNG/PDF export (render SVG → raster/pdf) | Most-requested output; usable outside diagrams.net | M | ★★★★☆ — ✅ vector PDF done; PNG deferred (dep weight) |
 | 5 | Layers (`parent="0"` layer cells, visibility) | Core draw.io structuring primitive | S | ★★★☆☆ |
 | 6 | HTML / rich-text labels (`<b>`,`<br>`,`<font>`) | Real formatting; needed for many shapes | S | ★★★★☆ — ✅ done (`html` flag) |
-| 7 | True UML class shape (stackLayout compartments) | Replaces the `\n` fake | M | ★★★☆☆ |
+| 7 | True UML class shape (stackLayout compartments) | Replaces the `\n` fake | M | ★★★☆☆ — ✅ done (`uml_class` + compartments) |
 | 8 | Gradients + glass/sketch styles | Raises aesthetic ceiling cheaply | S | ★★★☆☆ |
 | 9 | Sequence diagrams (lifelines, activations, messages) | A whole diagram class we lack | L | ★★★★☆ |
-| 10 | State machine diagrams (start/end states, transitions) | Common UML type; builds on edges | M | ★★★☆☆ |
-| 11 | Mind-map / tree auto-layout (radial + tree) | Layered layout is wrong shape for these | M | ★★★☆☆ |
+| 10 | State machine diagrams (start/end states, transitions) | Common UML type; builds on edges | M | ★★★☆☆ — ✅ done (`state_machine` + self-loops) |
+| 11 | Mind-map / tree auto-layout (radial + tree) | Layered layout is wrong shape for these | M | ★★★☆☆ — ✅ done (`tree` / `mind_map`) |
 | 12 | Tables / grids (`shape=table`, rows/cells) | UML, data, entity layouts | M | ★★★☆☆ |
 | 13 | Edge label position + style (`x/y` offset, bg/border) | Labels currently auto-centered only | S | ★★★☆☆ |
 | 14 | `update_edge` / `update_subgraph` / reorder | CRUD gaps — can't edit edges/containers | S | ★★★☆☆ — ✅ `update_edge` done |

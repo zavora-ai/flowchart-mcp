@@ -137,6 +137,13 @@ requires_approval = false
 credential_bindings = []
 
 [[tools]]
+name = "set_layout"
+description = "Set the current page's auto-layout: layered (default), tree, or mind_map."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
 name = "add_subgraph"
 description = "Group nodes into a container (group/container/swimlane/pool), optionally nested via parent."
 risk_class = "read_only"
