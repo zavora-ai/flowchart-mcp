@@ -244,6 +244,7 @@ fn dot_shape(shape: Shape) -> &'static str {
         Shape::Parallelogram | Shape::ParallelogramAlt => "parallelogram",
         Shape::Trapezoid | Shape::TrapezoidAlt => "trapezium",
         Shape::Note | Shape::Document => "note",
+        Shape::UmlClass => "record",
     }
 }
 
@@ -441,7 +442,7 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
             "        <mxCell id=\"{}\" value=\"{}\" style=\"{}\" vertex=\"1\" parent=\"1\">\n          \
              <mxGeometry x=\"{:.0}\" y=\"{:.0}\" width=\"{:.0}\" height=\"{:.0}\" as=\"geometry\"/>\n        </mxCell>\n",
             ident(&node.id),
-            xml_escape(&node.label),
+            drawio_node_value(node),
             drawio_node_style(node),
             b.x,
             b.y + header,
@@ -717,6 +718,29 @@ fn drawio_container_style(sg: &Subgraph) -> String {
     }
 }
 
+/// The draw.io cell `value` for a node. UML class nodes render as an HTML
+/// table (title + `<hr>` compartments); everything else is the escaped label
+/// (which is also valid HTML when `html=1`).
+fn drawio_node_value(node: &super::Node) -> String {
+    if node.shape == Shape::UmlClass {
+        let mut html = format!(
+            "<p style=\"margin:0px;margin-top:4px;text-align:center;\"><b>{}</b></p>",
+            xml_escape(&node.label)
+        );
+        for comp in &node.compartments {
+            html.push_str("<hr size=\"1\"/>");
+            let lines: Vec<String> = comp.iter().map(|l| xml_escape(l)).collect();
+            html.push_str(&format!(
+                "<p style=\"margin:0px;margin-left:4px;\">{}</p>",
+                lines.join("<br/>")
+            ));
+        }
+        // The value attribute must itself be XML-escaped HTML.
+        return xml_escape(&html);
+    }
+    xml_escape(&node.label)
+}
+
 /// Resolve a node's draw.io style, preferring a stencil token over image/shape.
 fn drawio_node_style(node: &super::Node) -> String {
     if let Some(key) = &node.stencil {
@@ -768,6 +792,9 @@ fn drawio_style(shape: Shape, style: &Style, image: Option<&str>) -> String {
         Shape::Note => "shape=note;whiteSpace=wrap;html=1;size=14;".to_string(),
         Shape::Card => "shape=card;whiteSpace=wrap;html=1;size=14;".to_string(),
         Shape::Document => "shape=document;whiteSpace=wrap;html=1;boundedLbl=1;".to_string(),
+        Shape::UmlClass => {
+            "verticalAlign=top;align=left;overflow=fill;html=1;whiteSpace=wrap;".to_string()
+        }
     };
     let mut s = base;
     apply_theme(&mut s, shape, style);
@@ -852,6 +879,22 @@ fn push_common(s: &mut String, style: &Style) {
 }
 
 fn drawio_edge_style(e: &Edge) -> String {
+    // Self-loop: use draw.io's loop routing so it arcs cleanly off one side.
+    if e.from == e.to {
+        let mut s = "edgeStyle=loopEdgeStyle;html=1;rounded=1;".to_string();
+        match e.line {
+            LineStyle::Dotted => s.push_str("dashed=1;"),
+            LineStyle::Thick => s.push_str("strokeWidth=3;"),
+            LineStyle::Solid => {}
+        }
+        s.push_str(&format!(
+            "startArrow={};endArrow={};endFill=1;strokeColor={};fontColor=#44515E;fontSize=11;labelBackgroundColor=#FFFFFF;",
+            e.resolved_start().drawio(),
+            e.resolved_end().drawio(),
+            e.color.as_deref().unwrap_or("#44515E"),
+        ));
+        return s;
+    }
     let routing = e
         .routing
         .unwrap_or(super::EdgeRouting::Orthogonal)
@@ -922,16 +965,40 @@ pub fn to_svg(fc: &Flowchart) -> String {
 
     for e in &fc.edges {
         let (a, b) = (l.get(&e.from), l.get(&e.to));
-        let (x1, y1) = (a.x + a.w / 2.0, a.y + a.h / 2.0);
-        let (x2, y2) = (b.x + b.w / 2.0, b.y + b.h / 2.0);
-        let (sx, sy) = clip_to_box(x2, y2, a);
-        let (tx, ty) = clip_to_box(x1, y1, b);
+        let color = e.color.as_deref().unwrap_or("#333");
+        let width = if e.line == LineStyle::Thick { 3.0 } else { 1.5 };
         let dash = match e.line {
             LineStyle::Dotted => " stroke-dasharray=\"5 4\"",
             _ => "",
         };
-        let width = if e.line == LineStyle::Thick { 3.0 } else { 1.5 };
-        let color = e.color.as_deref().unwrap_or("#333");
+        // Self-loop: a small arc off the node's top edge.
+        if e.from == e.to {
+            let lx = a.x + a.w * 0.7;
+            let rx = a.x + a.w * 0.95;
+            let ty = a.y;
+            let r = 14.0;
+            body.push_str(&format!(
+                "  <path d=\"M{lx:.1},{ty:.1} C{:.1},{:.1} {:.1},{:.1} {rx:.1},{ty:.1}\" \
+                 fill=\"none\" stroke=\"{color}\" stroke-width=\"{width}\"{dash} marker-end=\"url(#arrow)\"/>\n",
+                lx, ty - r * 2.0, rx, ty - r * 2.0,
+            ));
+            if let Some(lbl) = &e.label {
+                if !lbl.is_empty() {
+                    body.push_str(&format!(
+                        "  <text x=\"{:.1}\" y=\"{:.1}\" font-family=\"Helvetica\" font-size=\"11\" \
+                         fill=\"#333\" text-anchor=\"middle\">{}</text>\n",
+                        (lx + rx) / 2.0,
+                        ty - r * 2.0 - 2.0,
+                        xml_escape(lbl),
+                    ));
+                }
+            }
+            continue;
+        }
+        let (x1, y1) = (a.x + a.w / 2.0, a.y + a.h / 2.0);
+        let (x2, y2) = (b.x + b.w / 2.0, b.y + b.h / 2.0);
+        let (sx, sy) = clip_to_box(x2, y2, a);
+        let (tx, ty) = clip_to_box(x1, y1, b);
         let mut markers = String::new();
         if e.resolved_end() != super::Arrow::None {
             markers.push_str(" marker-end=\"url(#arrow)\"");
@@ -968,6 +1035,9 @@ pub fn to_svg(fc: &Flowchart) -> String {
                 b.w,
                 b.h,
             ));
+        } else if node.shape == Shape::UmlClass {
+            body.push_str(&svg_uml_class(node, b));
+            continue;
         } else {
             body.push_str(&svg_shape(node.shape, b, &node.style));
         }
@@ -986,6 +1056,40 @@ pub fn to_svg(fc: &Flowchart) -> String {
          <rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n{body}</svg>\n",
         l.width, l.height, l.width, l.height,
     )
+}
+
+/// Render a UML class box: bordered rect, bold title row, and a separated row
+/// per compartment line.
+fn svg_uml_class(node: &super::Node, b: Box) -> String {
+    let fill = node.style.fill.as_deref().unwrap_or("#FFFFFF");
+    let stroke = node.style.stroke.as_deref().unwrap_or("#33415C");
+    let title_h = 22.0;
+    let line_h = 16.0;
+    let mut s = format!(
+        "  <rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" fill=\"{fill}\" \
+         stroke=\"{stroke}\" stroke-width=\"1.2\"/>\n  \
+         <text x=\"{:.1}\" y=\"{:.1}\" font-family=\"Helvetica\" font-size=\"13\" font-weight=\"bold\" \
+         text-anchor=\"middle\" fill=\"#1F2A37\">{}</text>\n",
+        b.x, b.y, b.w, b.h,
+        b.x + b.w / 2.0, b.y + 15.0,
+        xml_escape(&node.label),
+    );
+    let mut y = b.y + title_h;
+    for comp in &node.compartments {
+        s.push_str(&format!(
+            "  <line x1=\"{:.1}\" y1=\"{y:.1}\" x2=\"{:.1}\" y2=\"{y:.1}\" stroke=\"{stroke}\" stroke-width=\"1\"/>\n",
+            b.x, b.x + b.w,
+        ));
+        for line in comp {
+            y += line_h;
+            s.push_str(&format!(
+                "  <text x=\"{:.1}\" y=\"{:.1}\" font-family=\"Helvetica\" font-size=\"12\" fill=\"#1F2A37\">{}</text>\n",
+                b.x + 6.0, y - 3.0, xml_escape(line),
+            ));
+        }
+        y += 4.0;
+    }
+    s
 }
 
 fn svg_label(node: &super::Node, b: Box) -> String {
@@ -1233,6 +1337,21 @@ mod tests {
         *doc.chart() = fc;
         let x = to_drawio(&doc);
         assert!(x.contains("&lt;b&gt;Title&lt;/b&gt;"));
+    }
+
+    #[test]
+    fn uml_class_and_self_loop_in_drawio() {
+        let mut fc = Flowchart::new(Direction::TB);
+        fc.add_class_node("c", "User", vec![vec!["+ id: int".into()], vec!["+ login(): void".into()]]).unwrap();
+        fc.add_edge("c", "c", Some("refresh".into()), LineStyle::Solid, true).unwrap();
+        let mut doc = Document::new(Direction::TB);
+        *doc.chart() = fc;
+        let x = to_drawio(&doc);
+        assert!(x.contains("&lt;b&gt;User&lt;/b&gt;"));
+        assert!(x.contains("+ login(): void"));
+        assert!(x.contains("loopEdgeStyle"));
+        let s = to_svg(doc.chart_ref());
+        assert!(s.contains("+ id: int"));
     }
 
     #[test]

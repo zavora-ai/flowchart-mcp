@@ -83,6 +83,8 @@ pub enum Shape {
     Note,
     Card,
     Document,
+    /// UML class box (name / attributes / methods compartments).
+    UmlClass,
 }
 
 impl Shape {
@@ -104,6 +106,7 @@ impl Shape {
             "note" | "comment" => Some(Self::Note),
             "card" => Some(Self::Card),
             "document" | "doc" => Some(Self::Document),
+            "uml_class" | "class" | "umlclass" => Some(Self::UmlClass),
             _ => None,
         }
     }
@@ -125,13 +128,16 @@ impl Shape {
             Self::Note => "note",
             Self::Card => "card",
             Self::Document => "document",
+            Self::UmlClass => "uml_class",
         }
     }
     /// Wrap a label in this shape's Mermaid delimiters. Shapes without a native
     /// Mermaid form fall back to a rectangle.
     pub fn mermaid_wrap(self, label: &str) -> String {
         match self {
-            Self::Rectangle | Self::Note | Self::Card | Self::Document => format!("[{label}]"),
+            Self::Rectangle | Self::Note | Self::Card | Self::Document | Self::UmlClass => {
+                format!("[{label}]")
+            }
             Self::RoundRect => format!("({label})"),
             Self::Stadium => format!("([{label}])"),
             Self::Subroutine => format!("[[{label}]]"),
@@ -380,6 +386,11 @@ pub struct Node {
     /// stripped to plain text (with `<br>` as line breaks) in svg/mermaid/dot.
     #[serde(default)]
     pub html: Option<bool>,
+    /// UML class compartments below the title (e.g. attributes, then methods).
+    /// Each inner `Vec` is one compartment's member lines. Only used by the
+    /// `uml_class` shape.
+    #[serde(default)]
+    pub compartments: Vec<Vec<String>>,
 }
 
 /// Edge line rendering.
@@ -470,6 +481,36 @@ pub struct Subgraph {
     pub parent: Option<String>,
 }
 
+/// Auto-layout algorithm for a chart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LayoutKind {
+    /// Layered ranks by longest path (default; flowcharts, swimlanes).
+    #[default]
+    Layered,
+    /// Hierarchical tree: a root fans out to children along the flow direction.
+    Tree,
+    /// Mind map: a central root radiates branches both ways on the cross axis.
+    MindMap,
+}
+
+impl LayoutKind {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().replace(['-', ' '], "_").as_str() {
+            "layered" | "flow" | "default" => Some(Self::Layered),
+            "tree" | "hierarchy" | "org" => Some(Self::Tree),
+            "mind_map" | "mindmap" | "radial" => Some(Self::MindMap),
+            _ => None,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Layered => "layered",
+            Self::Tree => "tree",
+            Self::MindMap => "mind_map",
+        }
+    }
+}
+
 /// The full flowchart document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Flowchart {
@@ -478,6 +519,8 @@ pub struct Flowchart {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
     pub subgraphs: Vec<Subgraph>,
+    #[serde(default)]
+    pub layout: LayoutKind,
 }
 
 impl Flowchart {
@@ -488,7 +531,12 @@ impl Flowchart {
             nodes: Vec::new(),
             edges: Vec::new(),
             subgraphs: Vec::new(),
+            layout: LayoutKind::Layered,
         }
+    }
+
+    pub fn set_layout(&mut self, layout: LayoutKind) {
+        self.layout = layout;
     }
 
     fn node_index(&self, id: &str) -> Option<usize> {
@@ -517,7 +565,35 @@ impl Flowchart {
             pos: None,
             size: None,
             html: None,
+            compartments: Vec::new(),
         });
+        Ok(())
+    }
+
+    /// Add a UML class node: a title plus ordered compartments (e.g. attributes
+    /// then methods). Each compartment is a list of member lines.
+    pub fn add_class_node(
+        &mut self,
+        id: &str,
+        name: &str,
+        compartments: Vec<Vec<String>>,
+    ) -> Result<(), FlowError> {
+        self.add_node(id, name, Shape::UmlClass)?;
+        let idx = self.node_index(id).expect("just added");
+        self.nodes[idx].compartments = compartments;
+        Ok(())
+    }
+
+    /// Set (replace) a node's UML compartments.
+    pub fn set_compartments(
+        &mut self,
+        id: &str,
+        compartments: Vec<Vec<String>>,
+    ) -> Result<(), FlowError> {
+        let idx = self
+            .node_index(id)
+            .ok_or_else(|| FlowError::NotFound(format!("node '{id}'")))?;
+        self.nodes[idx].compartments = compartments;
         Ok(())
     }
 

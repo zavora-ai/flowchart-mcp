@@ -81,7 +81,7 @@ fn full_lifecycle() {
     s.send(json!({"jsonrpc":"2.0","id":id,"method":"tools/list","params":{}}));
     let list = s.read_id(id);
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 27, "expected 27 tools");
+    assert_eq!(tools.len(), 28, "expected 28 tools");
 
     // Create a flowchart.
     let created = s.call("create_flowchart", json!({"direction":"TB","title":"Pipeline"}));
@@ -482,4 +482,45 @@ fn wave2_stencils_html_pdf() {
     let _ = std::fs::remove_file(&path);
 
     s.call("close_flowchart", json!({"handle":h}));
+}
+
+#[test]
+fn wave3_uml_tree_state() {
+    let mut s = Server::start();
+
+    // UML class node with compartments, on a tree layout.
+    let created = s.call("create_flowchart", json!({"direction":"TB","layout":"tree"}));
+    let h = created["data"]["handle"].as_str().unwrap().to_string();
+    s.call("add_node", json!({"handle":h,"id":"u","label":"User","shape":"uml_class",
+        "compartments":[["+ id: int","+ name: String"],["+ login(): void"]]}));
+    s.call("add_node", json!({"handle":h,"id":"a","label":"Admin","shape":"uml_class",
+        "compartments":[["+ role: String"],["+ grant(): void"]]}));
+    s.call("add_edge", json!({"handle":h,"from":"u","to":"a","end_arrow":"block","arrow":false}));
+    // Self-loop transition.
+    let loop_e = s.call("add_edge", json!({"handle":h,"from":"a","to":"a","label":"audit"}));
+    assert_eq!(loop_e["status"], "success");
+
+    let desc = s.call("describe_flowchart", json!({"handle":h}));
+    assert_eq!(desc["data"]["layout"], "tree");
+    let unode = desc["data"]["nodes"].as_array().unwrap().iter().find(|n| n["id"]=="u").unwrap();
+    assert_eq!(unode["compartments"].as_array().unwrap().len(), 2);
+
+    let xml = s.call("export_flowchart", json!({"handle":h,"format":"drawio"}));
+    let x = xml["data"]["content"].as_str().unwrap();
+    assert!(x.contains("&lt;b&gt;User&lt;/b&gt;"));
+    assert!(x.contains("+ login(): void"));
+    assert!(x.contains("loopEdgeStyle"));
+
+    // set_layout switches the algorithm.
+    let sl = s.call("set_layout", json!({"handle":h,"layout":"mind_map"}));
+    assert_eq!(sl["data"]["layout"], "mind_map");
+
+    // state_machine template builds with a self-loop edge.
+    let sm = s.call("create_flowchart", json!({"template":"state_machine"}));
+    let smh = sm["data"]["handle"].as_str().unwrap().to_string();
+    let smx = s.call("export_flowchart", json!({"handle":smh,"format":"drawio"}));
+    assert!(smx["data"]["content"].as_str().unwrap().contains("loopEdgeStyle"));
+
+    s.call("close_flowchart", json!({"handle":h}));
+    s.call("close_flowchart", json!({"handle":smh}));
 }

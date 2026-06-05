@@ -64,6 +64,16 @@ pub struct CreateInput {
     pub title: Option<String>,
     /// Optional template id (see list_templates) to pre-populate the chart.
     pub template: Option<String>,
+    /// Auto-layout: layered (default), tree, or mind_map.
+    pub layout: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetLayoutInput {
+    pub handle: String,
+    /// layered (default), tree, or mind_map.
+    pub layout: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -91,6 +101,9 @@ pub struct AddNodeInput {
     /// Treat the label as rich HTML (`<b>`, `<i>`, `<br>`, `<font>`…). Renders
     /// formatted in drawio; tags are stripped to plain text elsewhere.
     pub html: Option<bool>,
+    /// For shape `uml_class`: compartments below the title, each an array of
+    /// member lines (e.g. [["+ name: String"], ["+ save(): void"]]).
+    pub compartments: Option<Vec<Vec<String>>>,
     #[serde(flatten)]
     pub style: StyleFields,
 }

@@ -164,6 +164,31 @@ fn lane_ids(fc: &Flowchart) -> Vec<String> {
         .collect()
 }
 
+/// Content-aware box size for a node, honoring UML class compartments.
+fn node_box_size(node: &super::Node) -> (f64, f64) {
+    if node.shape == Shape::UmlClass {
+        return class_size(node);
+    }
+    node_size(&node.label, node.shape)
+}
+
+/// Size a UML class box from its title and compartment lines.
+fn class_size(node: &super::Node) -> (f64, f64) {
+    let mut widest = node.label.chars().count() as f64 * CHAR_W + 24.0;
+    let mut lines = 1usize; // title
+    for comp in &node.compartments {
+        lines += comp.len().max(1);
+        for l in comp {
+            widest = widest.max(l.chars().count() as f64 * CHAR_W + 16.0);
+        }
+    }
+    let w = round_up(widest, 10.0).clamp(140.0, 320.0);
+    // title row + compartment rows + separators.
+    let h = round_up(28.0 + lines as f64 * LINE_H + node.compartments.len() as f64 * 6.0, 10.0)
+        .clamp(60.0, 400.0);
+    (w, h)
+}
+
 /// Compute pixel geometry for every node.
 pub fn compute(fc: &Flowchart) -> Layout {
     let rank = rank_nodes(fc);
@@ -172,15 +197,17 @@ pub fn compute(fc: &Flowchart) -> Layout {
     let sizes: HashMap<String, (f64, f64)> = fc
         .nodes
         .iter()
-        .map(|n| (n.id.clone(), node_size(&n.label, n.shape)))
+        .map(|n| (n.id.clone(), node_box_size(n)))
         .collect();
 
-    if lanes.is_empty() {
-        compute_plain(fc, &rank, max_rank, &sizes)
-    } else {
-        compute_laned(fc, &rank, max_rank, &lanes, &sizes)
-    }
-    .with_overrides(fc)
+    let base = match fc.layout {
+        crate::engine::LayoutKind::Tree | crate::engine::LayoutKind::MindMap if lanes.is_empty() => {
+            compute_tree(fc, &sizes)
+        }
+        _ if lanes.is_empty() => compute_plain(fc, &rank, max_rank, &sizes),
+        _ => compute_laned(fc, &rank, max_rank, &lanes, &sizes),
+    };
+    base.with_overrides(fc)
 }
 
 impl Layout {
@@ -392,6 +419,190 @@ fn compute_laned(
     }
 }
 
+/// Tree / mind-map layout. Roots (no incoming edge) fan out to children along
+/// the main axis by depth; siblings are packed on the cross axis so subtrees
+/// never overlap. MindMap splits a single root's top-level branches to both
+/// sides of the root on the cross axis.
+fn compute_tree(fc: &Flowchart, sizes: &HashMap<String, (f64, f64)>) -> Layout {
+    let vertical = fc.direction.is_vertical();
+    let mind_map = fc.layout == crate::engine::LayoutKind::MindMap;
+    let main_size = |id: &str| {
+        let (w, h) = size_of(sizes, id);
+        if vertical { h } else { w }
+    };
+    let cross_size = |id: &str| {
+        let (w, h) = size_of(sizes, id);
+        if vertical { w } else { h }
+    };
+
+    // Children adjacency in declaration order; track incoming to find roots.
+    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut indeg: HashMap<&str, usize> = fc.nodes.iter().map(|n| (n.id.as_str(), 0)).collect();
+    for e in &fc.edges {
+        children.entry(e.from.as_str()).or_default().push(e.to.as_str());
+        *indeg.entry(e.to.as_str()).or_default() += 1;
+    }
+    let roots: Vec<&str> = fc
+        .nodes
+        .iter()
+        .map(|n| n.id.as_str())
+        .filter(|id| indeg.get(id).copied().unwrap_or(0) == 0)
+        .collect();
+    let roots: Vec<&str> = if roots.is_empty() {
+        fc.nodes.first().map(|n| n.id.as_str()).into_iter().collect()
+    } else {
+        roots
+    };
+
+    // Depth (main-axis rank) and cross-axis position via leaf packing.
+    let mut depth: HashMap<String, usize> = HashMap::new();
+    let mut cross: HashMap<String, f64> = HashMap::new();
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut cursor = MARGIN; // running cross-axis offset (centre of each leaf band)
+
+    // Recursive packer: returns the cross-centre of the placed subtree.
+    fn place(
+        id: &str,
+        d: usize,
+        children: &HashMap<&str, Vec<&str>>,
+        cross_size: &dyn Fn(&str) -> f64,
+        depth: &mut HashMap<String, usize>,
+        cross: &mut HashMap<String, f64>,
+        visited: &mut std::collections::HashSet<String>,
+        cursor: &mut f64,
+    ) -> f64 {
+        if !visited.insert(id.to_string()) {
+            return *cross.get(id).unwrap_or(&MARGIN);
+        }
+        depth.insert(id.to_string(), d);
+        let kids: Vec<&str> = children
+            .get(id)
+            .map(|v| v.iter().copied().filter(|k| !visited.contains(*k)).collect())
+            .unwrap_or_default();
+        let c = if kids.is_empty() {
+            let half = cross_size(id) / 2.0;
+            let pos = *cursor + half;
+            *cursor += cross_size(id) + SIBLING_GAP;
+            pos
+        } else {
+            let mut centres = Vec::new();
+            for k in &kids {
+                centres.push(place(k, d + 1, children, cross_size, depth, cross, visited, cursor));
+            }
+            centres.iter().sum::<f64>() / centres.len() as f64
+        };
+        cross.insert(id.to_string(), c);
+        c
+    }
+
+    for r in &roots {
+        place(r, 0, &children, &cross_size, &mut depth, &mut cross, &mut visited, &mut cursor);
+    }
+    // Any unvisited (cyclic) nodes get appended as their own leaves.
+    for n in &fc.nodes {
+        if !visited.contains(&n.id) {
+            place(&n.id, 0, &children, &cross_size, &mut depth, &mut cross, &mut visited, &mut cursor);
+        }
+    }
+
+    // Main-axis offset per depth = max main-size of that depth + RANK_GAP.
+    let max_depth = depth.values().copied().max().unwrap_or(0);
+    let mut depth_main = vec![0.0f64; max_depth + 1];
+    let mut depth_extent = vec![0.0f64; max_depth + 1];
+    for (id, &d) in &depth {
+        depth_extent[d] = depth_extent[d].max(main_size(id));
+    }
+    let mut acc = MARGIN;
+    for d in 0..=max_depth {
+        depth_main[d] = acc;
+        acc += depth_extent[d] + RANK_GAP * 1.4;
+    }
+
+    // Mind-map: mirror half the first root's branches to the negative side.
+    let mut neg: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if mind_map {
+        if let Some(root) = roots.first() {
+            if let Some(kids) = children.get(*root) {
+                // Collect each branch's whole subtree, alternate sides.
+                for (i, k) in kids.iter().enumerate() {
+                    if i % 2 == 1 {
+                        collect_subtree(k, &children, &mut neg);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut boxes = HashMap::new();
+    let mut max_cross = 0.0f64;
+    let mut max_main = 0.0f64;
+    for n in &fc.nodes {
+        let d = *depth.get(&n.id).unwrap_or(&0);
+        let c = *cross.get(&n.id).unwrap_or(&MARGIN);
+        let (w, h) = size_of(sizes, &n.id);
+        let main_pos = if mind_map && neg.contains(&n.id) {
+            // place on the opposite side of the root's depth-0 main line
+            depth_main[0] - (depth_main[d] - depth_main[0]) - main_size(&n.id) + main_size_root(&roots, sizes, vertical)
+        } else {
+            depth_main[d]
+        };
+        let cross_pos = c - cross_size(&n.id) / 2.0;
+        let (x, y) = if vertical { (cross_pos, main_pos) } else { (main_pos, cross_pos) };
+        boxes.insert(n.id.clone(), Box { x, y, w, h });
+        max_cross = max_cross.max(cross_pos + cross_size(&n.id));
+        max_main = max_main.max(main_pos + main_size(&n.id));
+    }
+
+    // Normalise negative main positions (mind-map left side) into view.
+    let min_main = boxes
+        .values()
+        .map(|b| if vertical { b.y } else { b.x })
+        .fold(f64::INFINITY, f64::min);
+    if min_main < MARGIN {
+        let shift = MARGIN - min_main;
+        for b in boxes.values_mut() {
+            if vertical { b.y += shift } else { b.x += shift }
+        }
+        max_main += shift;
+    }
+
+    let (width, height) = if vertical {
+        (max_cross + MARGIN, max_main + MARGIN)
+    } else {
+        (max_main + MARGIN, max_cross + MARGIN)
+    };
+
+    Layout {
+        boxes,
+        lanes: Vec::new(),
+        width: width.max(NODE_W + MARGIN * 2.0),
+        height: height.max(NODE_H + MARGIN * 2.0),
+    }
+}
+
+/// Main-axis size of the first root (used to mirror mind-map branches).
+fn main_size_root(roots: &[&str], sizes: &HashMap<String, (f64, f64)>, vertical: bool) -> f64 {
+    roots
+        .first()
+        .map(|r| {
+            let (w, h) = size_of(sizes, r);
+            if vertical { h } else { w }
+        })
+        .unwrap_or(0.0)
+}
+
+/// Collect a node and all its descendants into `set`.
+fn collect_subtree(id: &str, children: &HashMap<&str, Vec<&str>>, set: &mut std::collections::HashSet<String>) {
+    if !set.insert(id.to_string()) {
+        return;
+    }
+    if let Some(kids) = children.get(id) {
+        for k in kids {
+            collect_subtree(k, children, set);
+        }
+    }
+}
+
 /// Plain layered layout (no swimlanes), variable sizes, ranks centred on the
 /// cross axis.
 fn compute_plain(
@@ -571,6 +782,22 @@ mod tests {
             Shape::Rectangle,
         );
         assert!(w_long > w_short);
+    }
+
+    #[test]
+    fn tree_layout_places_root_before_children() {
+        let mut fc = Flowchart::new(Direction::TB);
+        fc.set_layout(crate::engine::LayoutKind::Tree);
+        fc.add_node("root", "Root", Shape::Rectangle).unwrap();
+        fc.add_node("a", "A", Shape::Rectangle).unwrap();
+        fc.add_node("b", "B", Shape::Rectangle).unwrap();
+        fc.add_edge("root", "a", None, crate::engine::LineStyle::Solid, true).unwrap();
+        fc.add_edge("root", "b", None, crate::engine::LineStyle::Solid, true).unwrap();
+        let l = compute(&fc);
+        assert!(l.get("root").y < l.get("a").y);
+        assert!(l.get("root").y < l.get("b").y);
+        assert!((l.get("a").y - l.get("b").y).abs() < 1.0);
+        assert!(l.get("a").x != l.get("b").x);
     }
 
     #[test]

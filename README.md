@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![ADK-Rust Enterprise](https://img.shields.io/badge/ADK--Rust-Enterprise-purple.svg)](https://enterprise.adk-rust.com)
 
-27 MCP tools for authoring diagrams and exporting them to **draw.io** (diagrams.net mxGraph XML), **Mermaid**, **Graphviz DOT**, **SVG**, **PDF**, and **JSON** — plus **Mermaid import**. Multi-page documents, swimlanes & nested containers, rich node/edge styling, node images, **draw.io stencil libraries** (AWS/Azure/GCP/network/Kubernetes/UML/BPMN), **manual layout & routing overrides** (node position/size, edge waypoints & fixed ports), and ready-made chart types (flowchart, swimlane, org chart, mind map, UML class, ERD, BPMN). Pure Rust, local-first, no external services.
+28 MCP tools for authoring diagrams and exporting them to **draw.io** (diagrams.net mxGraph XML), **Mermaid**, **Graphviz DOT**, **SVG**, **PDF**, and **JSON** — plus **Mermaid import**. Multi-page documents, swimlanes & nested containers, rich node/edge styling, node images, **draw.io stencil libraries** (AWS/Azure/GCP/network/Kubernetes/UML/BPMN), **manual layout & routing overrides** (node position/size, edge waypoints & fixed ports), **layered / tree / mind-map auto-layout**, a **true UML class shape** with compartments, self-loop edges, and ready-made chart types (flowchart, swimlane, org chart, mind map, UML class, ERD, BPMN, state machine). Pure Rust, local-first, no external services.
 
 ## Install
 
@@ -62,6 +62,7 @@ export_flowchart { "handle": h, "format": "drawio", "output_path": "login.drawio
 | `route_edge` | Manually route an edge (waypoints + fixed exit/entry ports); clear to revert. |
 | `remove_edge` | Delete an edge by index. |
 | `set_direction` | Change the current page's flow direction. |
+| `set_layout` | Switch auto-layout: `layered` (default), `tree`, or `mind_map`. |
 | `add_subgraph` | Group nodes into a container (group/container/swimlane/pool, optionally nested). |
 | `add_page` | Add a page to the document and select it. |
 | `select_page` | Select the active page by index. |
@@ -111,7 +112,9 @@ making JSON a lossless save format for the whole pipeline.
 
 
 
-`rectangle` · `round_rect` · `stadium` · `subroutine` · `cylinder` · `circle` · `double_circle` · `diamond` · `hexagon` · `parallelogram` · `parallelogram_alt` · `trapezoid` · `trapezoid_alt` · `note` · `card` · `document`
+`rectangle` · `round_rect` · `stadium` · `subroutine` · `cylinder` · `circle` · `double_circle` · `diamond` · `hexagon` · `parallelogram` · `parallelogram_alt` · `trapezoid` · `trapezoid_alt` · `note` · `card` · `document` · `uml_class`
+
+The `uml_class` shape renders a class box with a bold title and a separated row per **compartment** (pass `compartments` as an array of line-arrays, e.g. attributes then methods). It renders as an HTML class table in draw.io and as a partitioned box in SVG.
 
 Each shape maps to the closest native primitive in every export target (e.g. `diamond` → `rhombus` in draw.io, `diamond` in DOT, a polygon in SVG, `{...}` in Mermaid). Shapes without a native Mermaid form fall back to a rectangle there.
 
@@ -157,6 +160,14 @@ Containers nest via `parent`, so a pool of lanes round-trips to draw.io as real 
 
 A document starts with one page. `add_page` appends a page (and selects it); `select_page` switches the active page. The **drawio** export emits every page as a separate `<diagram>`; **mermaid**/**dot**/**svg** render the current page.
 
+## Auto-layout
+
+Geometry is computed for you. `set_layout` (or the `layout` field on `create_flowchart`) selects the algorithm:
+
+- `layered` (default) — ranked top-down/left-right flow; lane-aware when swimlanes are present.
+- `tree` — a root fans out to children along the flow direction with non-overlapping subtrees (org charts, hierarchies).
+- `mind_map` — a central root radiates branches both ways on the cross axis.
+
 ## Manual layout & routing
 
 Layout is automatic by default, but you can pin specifics when you need exact control — the rest of the diagram still auto-lays-out around your overrides, and the canvas grows to fit.
@@ -188,7 +199,7 @@ With `output_path` the content is written to disk; otherwise it is returned inli
 `create_flowchart` accepts a `template` id to pre-populate the document:
 
 ```
-basic · decision · approval · etl · swimlane · org_chart · mind_map · uml_class · erd · bpmn
+basic · decision · approval · etl · swimlane · org_chart · mind_map · uml_class · erd · bpmn · state_machine
 ```
 
 ## Responses

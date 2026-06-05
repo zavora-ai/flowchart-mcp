@@ -20,6 +20,7 @@ pub fn build(id: &str) -> Option<Document> {
         "uml_class" => uml_class(),
         "erd" => erd(),
         "bpmn" => bpmn(),
+        "state_machine" => state_machine(),
         _ => return None,
     };
     Some(wrap(fc))
@@ -39,11 +40,12 @@ pub fn catalog() -> Value {
         { "id": "approval", "description": "Request → review decision → approve/reject paths" },
         { "id": "etl", "description": "Extract → Transform → Load pipeline (left-right)" },
         { "id": "swimlane", "description": "Two-lane pool with a handoff between lanes" },
-        { "id": "org_chart", "description": "Org hierarchy (CEO → VPs → teams)" },
-        { "id": "mind_map", "description": "Central idea with radiating branches" },
-        { "id": "uml_class", "description": "UML classes with inheritance + association arrows" },
+        { "id": "org_chart", "description": "Org hierarchy (CEO → VPs → teams), tree layout" },
+        { "id": "mind_map", "description": "Central idea with radiating branches, mind-map layout" },
+        { "id": "uml_class", "description": "UML class boxes with compartments + inheritance/association arrows" },
         { "id": "erd", "description": "Entity-relationship diagram with crow's-foot arrows" },
-        { "id": "bpmn", "description": "BPMN-style lanes with start/task/gateway/end" }
+        { "id": "bpmn", "description": "BPMN-style lanes with start/task/gateway/end" },
+        { "id": "state_machine", "description": "State machine: start → states → end, with a self-loop transition" }
     ])
 }
 
@@ -118,6 +120,7 @@ fn swimlane() -> Flowchart {
 
 fn org_chart() -> Flowchart {
     let mut fc = Flowchart::new(Direction::TB);
+    fc.set_layout(crate::engine::LayoutKind::Tree);
     fc.add_node("ceo", "CEO", Shape::Rectangle).unwrap();
     fc.add_node("cto", "CTO", Shape::Rectangle).unwrap();
     fc.add_node("cfo", "CFO", Shape::Rectangle).unwrap();
@@ -132,11 +135,18 @@ fn org_chart() -> Flowchart {
 
 fn mind_map() -> Flowchart {
     let mut fc = Flowchart::new(Direction::LR);
-    fc.add_node("root", "Idea", Shape::Circle).unwrap();
+    fc.set_layout(crate::engine::LayoutKind::MindMap);
+    fc.add_node("root", "Central Idea", Shape::Circle).unwrap();
     fc.style_node("root", style_fill("#FFE6CC")).unwrap();
-    for (id, label) in [("b1", "Topic A"), ("b2", "Topic B"), ("b3", "Topic C")] {
+    for (id, label) in [("b1", "Topic A"), ("b2", "Topic B"), ("b3", "Topic C"), ("b4", "Topic D")] {
         fc.add_node(id, label, Shape::RoundRect).unwrap();
         let i = fc.add_edge("root", id, None, LineStyle::Solid, false).unwrap();
+        fc.style_edge(i, None, Some(Arrow::None), Some(EdgeRouting::Curved), None).unwrap();
+    }
+    // A couple of sub-branches to exercise subtree packing.
+    for (p, id, label) in [("b1", "a1", "Detail 1"), ("b1", "a2", "Detail 2"), ("b3", "c1", "Detail 3")] {
+        fc.add_node(id, label, Shape::RoundRect).unwrap();
+        let i = fc.add_edge(p, id, None, LineStyle::Solid, false).unwrap();
         fc.style_edge(i, None, Some(Arrow::None), Some(EdgeRouting::Curved), None).unwrap();
     }
     fc
@@ -144,15 +154,50 @@ fn mind_map() -> Flowchart {
 
 fn uml_class() -> Flowchart {
     let mut fc = Flowchart::new(Direction::TB);
-    fc.add_node("animal", "Animal\n+name: String\n+eat(): void", Shape::Rectangle).unwrap();
-    fc.add_node("dog", "Dog\n+bark(): void", Shape::Rectangle).unwrap();
-    fc.add_node("owner", "Owner\n+name: String", Shape::Rectangle).unwrap();
-    // Inheritance: Dog → Animal (hollow triangle ~ block).
-    let i = fc.add_edge("dog", "animal", None, LineStyle::Solid, false).unwrap();
-    fc.style_edge(i, None, Some(Arrow::Block), Some(EdgeRouting::Orthogonal), None).unwrap();
+    fc.set_layout(crate::engine::LayoutKind::Tree);
+    fc.add_class_node(
+        "animal",
+        "Animal",
+        vec![
+            vec!["+ name: String".into(), "+ age: int".into()],
+            vec!["+ eat(): void".into(), "+ move(): void".into()],
+        ],
+    )
+    .unwrap();
+    fc.add_class_node(
+        "dog",
+        "Dog",
+        vec![vec!["+ breed: String".into()], vec!["+ bark(): void".into()]],
+    )
+    .unwrap();
+    fc.add_class_node(
+        "owner",
+        "Owner",
+        vec![vec!["+ name: String".into()], vec!["+ adopt(d: Dog): void".into()]],
+    )
+    .unwrap();
+    // Inheritance: Dog → Animal (hollow triangle ~ block, unfilled).
+    let i = fc.add_edge("animal", "dog", None, LineStyle::Solid, false).unwrap();
+    fc.style_edge(i, Some(Arrow::Block), Some(Arrow::None), Some(EdgeRouting::Orthogonal), None).unwrap();
     // Association: Owner → Dog.
     let j = fc.add_edge("owner", "dog", Some("owns".into()), LineStyle::Solid, false).unwrap();
     fc.style_edge(j, None, Some(Arrow::Open), Some(EdgeRouting::Orthogonal), None).unwrap();
+    fc
+}
+
+fn state_machine() -> Flowchart {
+    let mut fc = Flowchart::new(Direction::LR);
+    fc.add_node("start", "●", Shape::Circle).unwrap();
+    fc.style_node("start", style_fill("#333333")).unwrap();
+    fc.add_node("idle", "Idle", Shape::RoundRect).unwrap();
+    fc.add_node("running", "Running", Shape::RoundRect).unwrap();
+    fc.add_node("done", "Done", Shape::DoubleCircle).unwrap();
+    fc.add_edge("start", "idle", None, LineStyle::Solid, true).unwrap();
+    fc.add_edge("idle", "running", Some("start".into()), LineStyle::Solid, true).unwrap();
+    // Self-loop transition on Running.
+    fc.add_edge("running", "running", Some("tick".into()), LineStyle::Solid, true).unwrap();
+    fc.add_edge("running", "idle", Some("pause".into()), LineStyle::Solid, true).unwrap();
+    fc.add_edge("running", "done", Some("finish".into()), LineStyle::Solid, true).unwrap();
     fc
 }
 
@@ -215,12 +260,28 @@ mod tests {
     fn all_templates_build() {
         for t in [
             "basic", "decision", "approval", "etl", "swimlane", "org_chart", "mind_map",
-            "uml_class", "erd", "bpmn",
+            "uml_class", "erd", "bpmn", "state_machine",
         ] {
             let mut doc = build(t).unwrap_or_else(|| panic!("template {t} missing"));
             assert!(!doc.chart().nodes.is_empty(), "{t} has no nodes");
         }
         assert!(build("nope").is_none());
+    }
+
+    #[test]
+    fn uml_class_has_compartments_and_tree_layout() {
+        let mut doc = build("uml_class").unwrap();
+        let fc = doc.chart();
+        assert_eq!(fc.layout, crate::engine::LayoutKind::Tree);
+        let animal = fc.nodes.iter().find(|n| n.id == "animal").unwrap();
+        assert_eq!(animal.shape, Shape::UmlClass);
+        assert_eq!(animal.compartments.len(), 2);
+    }
+
+    #[test]
+    fn state_machine_has_self_loop() {
+        let mut doc = build("state_machine").unwrap();
+        assert!(doc.chart().edges.iter().any(|e| e.from == e.to));
     }
 
     #[test]

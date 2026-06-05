@@ -4,7 +4,8 @@ use rmcp::{handler::server::wrapper::Parameters, tool, tool_router};
 use serde_json::json;
 
 use crate::engine::{
-    export, import, Arrow, ContainerKind, Direction, Document, EdgeRouting, LineStyle, Shape,
+    export, import, Arrow, ContainerKind, Direction, Document, EdgeRouting, LayoutKind, LineStyle,
+    Shape,
 };
 use crate::error::{category, engine_error, unknown_handle};
 use crate::store::{new_store, Shared};
@@ -12,8 +13,8 @@ use crate::types::inputs::{
     AddEdgeInput, AddNodeInput, AddPageInput, AddSubgraphInput, BuildDocumentInput, CreateInput,
     ExportInput, ExportPagesInput, HandleInput, ImportJsonInput, ImportMermaidInput,
     ListStencilsInput, MoveNodeInput, PageSpec, RemoveEdgeInput, RemoveNodeInput, RouteEdgeInput,
-    SelectPageInput, SetDirectionInput, SetNodeImageInput, SetNodeStencilInput, StyleEdgeInput,
-    StyleNodeInput, UpdateEdgeInput, UpdateNodeInput,
+    SelectPageInput, SetDirectionInput, SetLayoutInput, SetNodeImageInput, SetNodeStencilInput,
+    StyleEdgeInput, StyleNodeInput, UpdateEdgeInput, UpdateNodeInput,
 };
 use crate::types::responses::{error, success};
 
@@ -253,6 +254,12 @@ impl FlowchartServer {
             },
         };
         doc.chart().title = input.title;
+        if let Some(lk) = input.layout.as_deref() {
+            match LayoutKind::parse(lk) {
+                Some(k) => doc.chart().set_layout(k),
+                None => return error(category::INVALID_INPUT, format!("Unknown layout '{lk}'"), "Use layered, tree, or mind_map."),
+            }
+        }
         let chart = doc.chart_ref();
         let (n, e) = (chart.nodes.len(), chart.edges.len());
         let handle = self.store.write().await.insert(doc);
@@ -288,7 +295,7 @@ impl FlowchartServer {
         let nodes: Vec<_> = fc
             .nodes
             .iter()
-            .map(|n| json!({ "id": n.id, "label": n.label, "shape": n.shape.label(), "image": n.image, "stencil": n.stencil, "pos": n.pos, "size": n.size }))
+            .map(|n| json!({ "id": n.id, "label": n.label, "shape": n.shape.label(), "image": n.image, "stencil": n.stencil, "pos": n.pos, "size": n.size, "compartments": n.compartments }))
             .collect();
         let edges: Vec<_> = fc
             .edges
@@ -305,6 +312,7 @@ impl FlowchartServer {
             "Flowchart described",
             json!({
                 "direction": fc.direction.as_mermaid(),
+                "layout": fc.layout.label(),
                 "title": fc.title,
                 "pages": pages,
                 "current_page": current,
@@ -320,8 +328,9 @@ impl FlowchartServer {
     #[tool(
         description = "Add a node to the current page. shape: rectangle (default), round_rect, \
         stadium, subroutine, cylinder, circle, double_circle, diamond, hexagon, parallelogram, \
-        parallelogram_alt, trapezoid, trapezoid_alt, note, card, document. Optional image (path/URI) \
-        and rich style (fill/stroke/text_color/stroke_width/font_family/font_size/bold/italic/align/\
+        parallelogram_alt, trapezoid, trapezoid_alt, note, card, document, uml_class. Optional \
+        image (path/URI), stencil, html (rich-text label), compartments (uml_class sections), and \
+        rich style (fill/stroke/text_color/stroke_width/font_family/font_size/bold/italic/align/\
         opacity/rounded/shadow/dashed)."
     )]
     async fn add_node(&self, Parameters(input): Parameters<AddNodeInput>) -> String {
@@ -349,6 +358,9 @@ impl FlowchartServer {
         }
         if input.html.is_some() {
             let _ = fc.set_node_html(&input.id, input.html);
+        }
+        if let Some(comp) = input.compartments {
+            let _ = fc.set_compartments(&input.id, comp);
         }
         let style = input.style.into_style();
         if !style.is_empty() {
@@ -630,6 +642,22 @@ impl FlowchartServer {
         };
         doc.chart().set_direction(dir);
         success("Set direction", json!({ "direction": dir.as_mermaid() }))
+    }
+
+    #[tool(
+        description = "Set the current page's auto-layout: 'layered' (default; flowcharts/swimlanes), \
+        'tree' (hierarchy/org chart), or 'mind_map' (central root radiating both ways)."
+    )]
+    async fn set_layout(&self, Parameters(input): Parameters<SetLayoutInput>) -> String {
+        let Some(kind) = LayoutKind::parse(&input.layout) else {
+            return error(category::INVALID_INPUT, format!("Unknown layout '{}'", input.layout), "Use layered, tree, or mind_map.");
+        };
+        let mut store = self.store.write().await;
+        let Some(doc) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        doc.chart().set_layout(kind);
+        success("Set layout", json!({ "layout": kind.label() }))
     }
 
     #[tool(
