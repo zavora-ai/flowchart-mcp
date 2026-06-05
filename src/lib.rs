@@ -4,6 +4,7 @@
 
 pub mod engine;
 pub mod error;
+pub mod sequence;
 pub mod server;
 pub mod stencils;
 pub mod store;

@@ -484,3 +484,64 @@ pub struct ExportPagesInput {
     /// "{index}-{name}.{ext}".
     pub name_pattern: Option<String>,
 }
+
+// ---------------------------------------------------------------------------
+// Sequence diagrams
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateSequenceInput {
+    /// Optional diagram title.
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AddParticipantInput {
+    pub handle: String,
+    /// Unique participant id (used to reference it in messages).
+    pub id: String,
+    /// Display label. Defaults to the id when omitted.
+    pub label: Option<String>,
+    /// Render as a UML actor (stick figure) rather than a box.
+    pub actor: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AddMessageInput {
+    pub handle: String,
+    /// Source participant id (auto-created if missing).
+    pub from: String,
+    /// Target participant id (auto-created if missing).
+    pub to: String,
+    /// Message text.
+    pub label: Option<String>,
+    /// Arrow kind: sync (default), async, return, create, or destroy.
+    pub kind: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RemoveMessageInput {
+    pub handle: String,
+    /// Message index (see describe_sequence).
+    pub index: usize,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SequenceHandleInput {
+    pub handle: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportSequenceInput {
+    pub handle: String,
+    /// Export format: drawio, mermaid, svg, or json.
+    pub format: String,
+    /// Optional path to write the export to. Returned inline when omitted.
+    pub output_path: Option<String>,
+}

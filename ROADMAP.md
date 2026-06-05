@@ -13,7 +13,7 @@ Effort: S = <½ day · M = ~1 day · L = multi-day.
 | 6 | HTML / rich-text labels (`<b>`,`<br>`,`<font>`) | Real formatting; needed for many shapes | S | ★★★★☆ — ✅ done (`html` flag) |
 | 7 | True UML class shape (stackLayout compartments) | Replaces the `\n` fake | M | ★★★☆☆ — ✅ done (`uml_class` + compartments) |
 | 8 | Gradients + glass/sketch styles | Raises aesthetic ceiling cheaply | S | ★★★☆☆ — ✅ done (`gradient`/`sketch`/`glass`) |
-| 9 | Sequence diagrams (lifelines, activations, messages) | A whole diagram class we lack | L | ★★★★☆ |
+| 9 | Sequence diagrams (lifelines, activations, messages) | A whole diagram class we lack | L | ★★★★☆ — ✅ done (sequence subsystem, 7 tools) |
 | 10 | State machine diagrams (start/end states, transitions) | Common UML type; builds on edges | M | ★★★☆☆ — ✅ done (`state_machine` + self-loops) |
 | 11 | Mind-map / tree auto-layout (radial + tree) | Layered layout is wrong shape for these | M | ★★★☆☆ — ✅ done (`tree` / `mind_map`) |
 | 12 | Tables / grids (`shape=table`, rows/cells) | UML, data, entity layouts | M | ★★★☆☆ |

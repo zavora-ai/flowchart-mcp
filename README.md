@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![ADK-Rust Enterprise](https://img.shields.io/badge/ADK--Rust-Enterprise-purple.svg)](https://enterprise.adk-rust.com)
 
-32 MCP tools for authoring diagrams and exporting them to **draw.io** (diagrams.net mxGraph XML), **Mermaid**, **Graphviz DOT**, **SVG**, **PDF**, and **JSON** — plus **Mermaid import**. Multi-page documents, swimlanes & nested containers, rich node/edge styling, **named themes/palettes**, **gradients & sketch style**, **layers**, node images, **draw.io stencil libraries** (AWS/Azure/GCP/network/Kubernetes/UML/BPMN), **manual layout & routing overrides** (node position/size, edge waypoints & fixed ports, edge label position), **layered / tree / mind-map auto-layout**, a **true UML class shape** with compartments, self-loop edges, and ready-made chart types (flowchart, swimlane, org chart, mind map, UML class, ERD, BPMN, state machine). Pure Rust, local-first, no external services.
+32 MCP tools for authoring diagrams and exporting them to **draw.io** (diagrams.net mxGraph XML), **Mermaid**, **Graphviz DOT**, **SVG**, **PDF**, and **JSON** — plus **Mermaid import**. Multi-page documents, swimlanes & nested containers, rich node/edge styling, **named themes/palettes**, **gradients & sketch style**, **layers**, node images, **draw.io stencil libraries** (AWS/Azure/GCP/network/Kubernetes/UML/BPMN), **manual layout & routing overrides** (node position/size, edge waypoints & fixed ports, edge label position), **layered / tree / mind-map auto-layout**, a **true UML class shape** with compartments, self-loop edges, and ready-made chart types (flowchart, swimlane, org chart, mind map, UML class, ERD, BPMN, state machine). Plus a dedicated **UML sequence-diagram** subsystem (7 more tools: participants, lifelines, ordered messages → draw.io / Mermaid / SVG / JSON). 39 tools total. Pure Rust, local-first, no external services.
 
 ## Install
 
@@ -214,9 +214,32 @@ With `output_path` the content is written to disk; otherwise it is returned inli
 basic · decision · approval · etl · swimlane · org_chart · mind_map · uml_class · erd · bpmn · state_machine
 ```
 
-## Responses
+## Sequence diagrams
 
-Every tool returns a structured JSON string:
+UML sequence diagrams are a separate subsystem with their own handle space (a sequence handle is not a flowchart handle). Build a diagram from **participants** (lifelines) and ordered **messages**, then export it.
+
+```jsonc
+create_sequence   { "title": "Login" }                                  // → { handle }
+add_participant   { "handle": h, "id": "u", "label": "User", "actor": true }
+add_participant   { "handle": h, "id": "api", "label": "API" }
+add_message       { "handle": h, "from": "u",  "to": "api", "label": "POST /login", "kind": "sync" }
+add_message       { "handle": h, "from": "api", "to": "u",  "label": "200 OK",      "kind": "return" }
+export_sequence   { "handle": h, "format": "drawio", "output_path": "login.drawio" }
+```
+
+| Tool | Purpose |
+|------|---------|
+| `create_sequence` | New sequence diagram (optional title). Returns a sequence handle. |
+| `close_sequence` | Free a sequence's memory. |
+| `add_participant` | Add a lifeline (`actor: true` for a stick figure). |
+| `add_message` | Add an ordered message; missing endpoints are auto-created. |
+| `remove_message` | Delete a message by index. |
+| `describe_sequence` | Title, participants, and ordered messages (with indexes). |
+| `export_sequence` | Export to `drawio` (UML lifelines), `mermaid` (sequenceDiagram), `svg`, or `json`. |
+
+Message `kind` is `sync` (default, solid + filled arrow), `async` (open arrow), `return` (dashed), `create`, or `destroy` (ends a lifeline). The **drawio** export uses real `umlLifeline`/`umlActor` shapes; **mermaid** emits a `sequenceDiagram`.
+
+## Responses
 
 ```jsonc
 // success

@@ -101,6 +101,67 @@ pub fn new_store() -> Shared {
     Arc::new(RwLock::new(FlowchartStore::new()))
 }
 
+// ---------------------------------------------------------------------------
+// Sequence-diagram store (parallel to FlowchartStore; same LRU + TTL policy).
+// ---------------------------------------------------------------------------
+
+use crate::sequence::Sequence;
+
+struct SeqEntry {
+    seq: Sequence,
+    last_used: Instant,
+}
+
+pub struct SequenceStore {
+    map: HashMap<String, SeqEntry>,
+    capacity: usize,
+    ttl: Duration,
+}
+
+impl SequenceStore {
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            capacity: CAPACITY,
+            ttl: TTL,
+        }
+    }
+
+    pub fn insert(&mut self, seq: Sequence) -> String {
+        self.map.retain(|_, e| e.last_used.elapsed() < self.ttl);
+        if self.map.len() >= self.capacity {
+            if let Some(h) = self.map.iter().min_by_key(|(_, e)| e.last_used).map(|(h, _)| h.clone()) {
+                self.map.remove(&h);
+            }
+        }
+        let handle = Uuid::new_v4().to_string();
+        self.map.insert(handle.clone(), SeqEntry { seq, last_used: Instant::now() });
+        handle
+    }
+
+    pub fn get_mut(&mut self, handle: &str) -> Option<&mut Sequence> {
+        let e = self.map.get_mut(handle)?;
+        e.last_used = Instant::now();
+        Some(&mut e.seq)
+    }
+
+    pub fn remove(&mut self, handle: &str) -> bool {
+        self.map.remove(handle).is_some()
+    }
+}
+
+impl Default for SequenceStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub type SharedSeq = Arc<RwLock<SequenceStore>>;
+
+pub fn new_seq_store() -> SharedSeq {
+    Arc::new(RwLock::new(SequenceStore::new()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
