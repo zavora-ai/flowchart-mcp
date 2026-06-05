@@ -5,16 +5,17 @@ use serde_json::json;
 
 use crate::engine::{
     export, import, Arrow, ContainerKind, Direction, Document, EdgeRouting, LayoutKind, LineStyle,
-    Shape,
+    Shape, Theme,
 };
 use crate::error::{category, engine_error, unknown_handle};
 use crate::store::{new_store, Shared};
 use crate::types::inputs::{
-    AddEdgeInput, AddNodeInput, AddPageInput, AddSubgraphInput, BuildDocumentInput, CreateInput,
-    ExportInput, ExportPagesInput, HandleInput, ImportJsonInput, ImportMermaidInput,
-    ListStencilsInput, MoveNodeInput, PageSpec, RemoveEdgeInput, RemoveNodeInput, RouteEdgeInput,
-    SelectPageInput, SetDirectionInput, SetLayoutInput, SetNodeImageInput, SetNodeStencilInput,
-    StyleEdgeInput, StyleNodeInput, UpdateEdgeInput, UpdateNodeInput,
+    AddEdgeInput, AddLayerInput, AddNodeInput, AddPageInput, AddSubgraphInput, ApplyThemeInput,
+    BuildDocumentInput, CreateInput, ExportInput, ExportPagesInput, HandleInput, ImportJsonInput,
+    ImportMermaidInput, LabelEdgeInput, ListStencilsInput, MoveNodeInput, PageSpec, RemoveEdgeInput,
+    RemoveNodeInput, RouteEdgeInput, SelectPageInput, SetDirectionInput, SetLayoutInput,
+    SetNodeImageInput, SetNodeLayerInput, SetNodeStencilInput, StyleEdgeInput, StyleNodeInput,
+    UpdateEdgeInput, UpdateNodeInput,
 };
 use crate::types::responses::{error, success};
 
@@ -105,21 +106,7 @@ fn build_page_chart(
     }
     // Styles (NodeSpec.style is flattened; clone per node since into_style consumes)
     for n in spec.nodes.iter() {
-        let style = crate::engine::Style {
-            fill: n.style.fill.clone(),
-            stroke: n.style.stroke.clone(),
-            text_color: n.style.text_color.clone(),
-            stroke_width: n.style.stroke_width,
-            font_family: n.style.font_family.clone(),
-            font_size: n.style.font_size,
-            bold: n.style.bold,
-            italic: n.style.italic,
-            align: n.style.align.clone(),
-            opacity: n.style.opacity,
-            rounded: n.style.rounded,
-            shadow: n.style.shadow,
-            dashed: n.style.dashed,
-        };
+        let style = n.style.clone().into_style();
         if !style.is_empty() {
             let _ = fc.style_node(&n.id, style);
         }
@@ -260,6 +247,14 @@ impl FlowchartServer {
                 None => return error(category::INVALID_INPUT, format!("Unknown layout '{lk}'"), "Use layered, tree, or mind_map."),
             }
         }
+        if let Some(t) = input.theme.as_deref() {
+            match Theme::parse(t) {
+                Some(th) => {
+                    doc.chart().apply_theme(th);
+                }
+                None => return error(category::INVALID_INPUT, format!("Unknown theme '{t}'"), "Use blue, green, gray, purple, orange, or dark."),
+            }
+        }
         let chart = doc.chart_ref();
         let (n, e) = (chart.nodes.len(), chart.edges.len());
         let handle = self.store.write().await.insert(doc);
@@ -295,7 +290,7 @@ impl FlowchartServer {
         let nodes: Vec<_> = fc
             .nodes
             .iter()
-            .map(|n| json!({ "id": n.id, "label": n.label, "shape": n.shape.label(), "image": n.image, "stencil": n.stencil, "pos": n.pos, "size": n.size, "compartments": n.compartments }))
+            .map(|n| json!({ "id": n.id, "label": n.label, "shape": n.shape.label(), "image": n.image, "stencil": n.stencil, "pos": n.pos, "size": n.size, "compartments": n.compartments, "layer": n.layer }))
             .collect();
         let edges: Vec<_> = fc
             .edges
@@ -307,6 +302,11 @@ impl FlowchartServer {
             .subgraphs
             .iter()
             .map(|s| json!({ "id": s.id, "label": s.label, "kind": s.kind.label(), "parent": s.parent, "members": s.members }))
+            .collect();
+        let layers: Vec<_> = fc
+            .layers
+            .iter()
+            .map(|l| json!({ "id": l.id, "label": l.label, "visible": l.visible }))
             .collect();
         success(
             "Flowchart described",
@@ -321,6 +321,7 @@ impl FlowchartServer {
                 "nodes": nodes,
                 "edges": edges,
                 "subgraphs": subgraphs,
+                "layers": layers,
             }),
         )
     }
@@ -361,6 +362,9 @@ impl FlowchartServer {
         }
         if let Some(comp) = input.compartments {
             let _ = fc.set_compartments(&input.id, comp);
+        }
+        if input.layer.is_some() {
+            let _ = fc.set_node_layer(&input.id, input.layer);
         }
         let style = input.style.into_style();
         if !style.is_empty() {
@@ -658,6 +662,68 @@ impl FlowchartServer {
         };
         doc.chart().set_layout(kind);
         success("Set layout", json!({ "layout": kind.label() }))
+    }
+
+    #[tool(
+        description = "Apply a named color palette to every node and edge on the current page: \
+        blue, green, gray, purple, orange, or dark."
+    )]
+    async fn apply_theme(&self, Parameters(input): Parameters<ApplyThemeInput>) -> String {
+        let Some(theme) = Theme::parse(&input.theme) else {
+            return error(category::INVALID_INPUT, format!("Unknown theme '{}'", input.theme), "Use blue, green, gray, purple, orange, or dark.");
+        };
+        let mut store = self.store.write().await;
+        let Some(doc) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        let n = doc.chart().apply_theme(theme);
+        success("Applied theme", json!({ "theme": theme.label(), "nodes_restyled": n }))
+    }
+
+    #[tool(
+        description = "Add a named layer to the current page (drawio layers). Nodes can be assigned \
+        to it with set_node_layer or the `layer` field on add_node. visible defaults to true."
+    )]
+    async fn add_layer(&self, Parameters(input): Parameters<AddLayerInput>) -> String {
+        let mut store = self.store.write().await;
+        let Some(doc) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        match doc.chart().add_layer(&input.id, &input.label, input.visible.unwrap_or(true)) {
+            Ok(()) => success("Added layer", json!({ "id": input.id })),
+            Err(e) => engine_error(e),
+        }
+    }
+
+    #[tool(description = "Assign a node to a layer (must exist). Omit `layer` to move it back to the default layer.")]
+    async fn set_node_layer(&self, Parameters(input): Parameters<SetNodeLayerInput>) -> String {
+        let mut store = self.store.write().await;
+        let Some(doc) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        match doc.chart().set_node_layer(&input.id, input.layer) {
+            Ok(()) => success("Set node layer", json!({ "id": input.id })),
+            Err(e) => engine_error(e),
+        }
+    }
+
+    #[tool(
+        description = "Position/style an edge's label: pos along the edge (-1..1, 0=middle), \
+        offset (perpendicular px), bg (label background hex or 'none'), border (label border hex). \
+        Only provided fields change."
+    )]
+    async fn label_edge(&self, Parameters(input): Parameters<LabelEdgeInput>) -> String {
+        if input.pos.is_none() && input.offset.is_none() && input.bg.is_none() && input.border.is_none() {
+            return error(category::INVALID_INPUT, "Nothing to set", "Provide pos, offset, bg, or border.");
+        }
+        let mut store = self.store.write().await;
+        let Some(doc) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        match doc.chart().label_edge(input.index, input.pos, input.offset, input.bg, input.border) {
+            Ok(()) => success("Labeled edge", json!({ "index": input.index })),
+            Err(e) => engine_error(e),
+        }
     }
 
     #[tool(
