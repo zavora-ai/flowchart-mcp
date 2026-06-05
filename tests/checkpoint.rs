@@ -81,7 +81,7 @@ fn full_lifecycle() {
     s.send(json!({"jsonrpc":"2.0","id":id,"method":"tools/list","params":{}}));
     let list = s.read_id(id);
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 32, "expected 32 tools");
+    assert_eq!(tools.len(), 39, "expected 39 tools");
 
     // Create a flowchart.
     let created = s.call("create_flowchart", json!({"direction":"TB","title":"Pipeline"}));
@@ -567,4 +567,54 @@ fn wave4_themes_layers_styles() {
     assert!(x.contains("fillColor=#D5E8D4")); // green theme
 
     s.call("close_flowchart", json!({"handle":h}));
+}
+
+#[test]
+fn sequence_diagram_lifecycle() {
+    let mut s = Server::start();
+
+    let created = s.call("create_sequence", json!({"title":"Login"}));
+    assert_eq!(created["status"], "success");
+    let h = created["data"]["handle"].as_str().unwrap().to_string();
+
+    s.call("add_participant", json!({"handle":h,"id":"u","label":"User","actor":true}));
+    s.call("add_participant", json!({"handle":h,"id":"api","label":"API"}));
+    let m = s.call("add_message", json!({"handle":h,"from":"u","to":"api","label":"POST /login","kind":"sync"}));
+    assert_eq!(m["data"]["index"], 0);
+    s.call("add_message", json!({"handle":h,"from":"api","to":"db","label":"query","kind":"sync"})); // db auto-created
+    s.call("add_message", json!({"handle":h,"from":"api","to":"u","label":"200 OK","kind":"return"}));
+    s.call("add_message", json!({"handle":h,"from":"api","to":"api","label":"audit","kind":"async"}));
+
+    let desc = s.call("describe_sequence", json!({"handle":h}));
+    assert_eq!(desc["data"]["participant_count"], 3); // u, api, db
+    assert_eq!(desc["data"]["message_count"], 4);
+
+    // drawio export has UML lifelines + message edges.
+    let dx = s.call("export_sequence", json!({"handle":h,"format":"drawio"}));
+    let x = dx["data"]["content"].as_str().unwrap();
+    assert!(x.contains("umlActor"));
+    assert!(x.contains("umlLifeline"));
+    assert!(x.contains("endArrow=block")); // sync
+    assert!(x.contains("value=\"POST /login\""));
+
+    // mermaid sequenceDiagram.
+    let mm = s.call("export_sequence", json!({"handle":h,"format":"mermaid"}));
+    let mmd = mm["data"]["content"].as_str().unwrap();
+    assert!(mmd.starts_with("sequenceDiagram"));
+    assert!(mmd.contains("u->>api: POST /login"));
+
+    // json round-trip shape.
+    let js = s.call("export_sequence", json!({"handle":h,"format":"json"}));
+    let model: Value = serde_json::from_str(js["data"]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(model["messages"].as_array().unwrap().len(), 4);
+
+    // remove a message.
+    let rm = s.call("remove_message", json!({"handle":h,"index":3}));
+    assert_eq!(rm["data"]["message_count"], 3);
+
+    // Sequence handles are a separate space — describe_flowchart on it fails.
+    let cross = s.call("describe_flowchart", json!({"handle":h}));
+    assert_eq!(cross["status"], "error");
+
+    s.call("close_sequence", json!({"handle":h}));
 }

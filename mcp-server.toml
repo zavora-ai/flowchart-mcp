@@ -233,3 +233,52 @@ description = "Validate the document against flowchart correctness properties (l
 risk_class = "read_only"
 requires_approval = false
 credential_bindings = []
+
+[[tools]]
+name = "create_sequence"
+description = "Create a new UML sequence diagram (optional title). Returns a sequence handle."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "close_sequence"
+description = "Close a sequence diagram and free its memory."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "add_participant"
+description = "Add a participant (lifeline) to a sequence; actor=true for a stick figure."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "add_message"
+description = "Add a message between participants (sync/async/return/create/destroy); missing endpoints are auto-created. Returns the message index."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "remove_message"
+description = "Remove the message at the given index from a sequence."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "describe_sequence"
+description = "Describe a sequence: title, participants, and ordered messages with indexes."
+risk_class = "read_only"
+requires_approval = false
+credential_bindings = []
+
+[[tools]]
+name = "export_sequence"
+description = "Export a sequence diagram to drawio (UML lifelines), mermaid (sequenceDiagram), svg, or json — inline or to a file path."
+risk_class = "local_write"
+requires_approval = false
+credential_bindings = []

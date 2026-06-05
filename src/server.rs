@@ -8,14 +8,16 @@ use crate::engine::{
     Shape, Theme,
 };
 use crate::error::{category, engine_error, unknown_handle};
-use crate::store::{new_store, Shared};
+use crate::sequence::{self, MessageKind, Sequence};
+use crate::store::{new_seq_store, new_store, Shared, SharedSeq};
 use crate::types::inputs::{
-    AddEdgeInput, AddLayerInput, AddNodeInput, AddPageInput, AddSubgraphInput, ApplyThemeInput,
-    BuildDocumentInput, CreateInput, ExportInput, ExportPagesInput, HandleInput, ImportJsonInput,
+    AddEdgeInput, AddLayerInput, AddMessageInput, AddNodeInput, AddPageInput, AddParticipantInput,
+    AddSubgraphInput, ApplyThemeInput, BuildDocumentInput, CreateInput, CreateSequenceInput,
+    ExportInput, ExportPagesInput, ExportSequenceInput, HandleInput, ImportJsonInput,
     ImportMermaidInput, LabelEdgeInput, ListStencilsInput, MoveNodeInput, PageSpec, RemoveEdgeInput,
-    RemoveNodeInput, RouteEdgeInput, SelectPageInput, SetDirectionInput, SetLayoutInput,
-    SetNodeImageInput, SetNodeLayerInput, SetNodeStencilInput, StyleEdgeInput, StyleNodeInput,
-    UpdateEdgeInput, UpdateNodeInput,
+    RemoveMessageInput, RemoveNodeInput, RouteEdgeInput, SelectPageInput, SequenceHandleInput,
+    SetDirectionInput, SetLayoutInput, SetNodeImageInput, SetNodeLayerInput, SetNodeStencilInput,
+    StyleEdgeInput, StyleNodeInput, UpdateEdgeInput, UpdateNodeInput,
 };
 use crate::types::responses::{error, success};
 
@@ -23,11 +25,15 @@ use crate::types::responses::{error, success};
 #[derive(Clone)]
 pub struct FlowchartServer {
     store: Shared,
+    seq_store: SharedSeq,
 }
 
 impl FlowchartServer {
     pub fn new() -> Self {
-        Self { store: new_store() }
+        Self {
+            store: new_store(),
+            seq_store: new_seq_store(),
+        }
     }
 }
 
@@ -1012,6 +1018,141 @@ impl FlowchartServer {
             if violations.is_empty() { "All correctness properties hold" } else { "Validation found issues" },
             json!({ "valid": violations.is_empty(), "violation_count": violations.len(), "violations": items }),
         )
+    }
+
+    // -----------------------------------------------------------------------
+    // Sequence diagrams (separate handle space from flowcharts)
+    // -----------------------------------------------------------------------
+
+    #[tool(description = "Create a new UML sequence diagram. Optional title. Returns a sequence handle (distinct from flowchart handles).")]
+    async fn create_sequence(&self, Parameters(input): Parameters<CreateSequenceInput>) -> String {
+        let mut seq = Sequence::new();
+        seq.title = input.title;
+        let handle = self.seq_store.write().await.insert(seq);
+        success("Created sequence", json!({ "handle": handle }))
+    }
+
+    #[tool(description = "Close a sequence diagram and free its memory.")]
+    async fn close_sequence(&self, Parameters(input): Parameters<SequenceHandleInput>) -> String {
+        if self.seq_store.write().await.remove(&input.handle) {
+            success("Closed sequence", json!({ "handle": input.handle }))
+        } else {
+            unknown_handle(&input.handle)
+        }
+    }
+
+    #[tool(description = "Add a participant (lifeline) to a sequence. Set actor=true for a stick figure. Default label is the id.")]
+    async fn add_participant(&self, Parameters(input): Parameters<AddParticipantInput>) -> String {
+        let label = input.label.clone().unwrap_or_else(|| input.id.clone());
+        let mut store = self.seq_store.write().await;
+        let Some(seq) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        match seq.add_participant(&input.id, &label, input.actor.unwrap_or(false)) {
+            Ok(()) => success("Added participant", json!({ "id": input.id, "participant_count": seq.participants.len() })),
+            Err(e) => engine_error(e),
+        }
+    }
+
+    #[tool(
+        description = "Add a message between participants (missing endpoints are auto-created). \
+        kind: sync (default), async, return, create, or destroy. Returns the message index."
+    )]
+    async fn add_message(&self, Parameters(input): Parameters<AddMessageInput>) -> String {
+        let kind = match input.kind.as_deref() {
+            None => MessageKind::Sync,
+            Some(k) => match MessageKind::parse(k) {
+                Some(mk) => mk,
+                None => return error(category::INVALID_INPUT, format!("Unknown message kind '{k}'"), "Use sync, async, return, create, or destroy."),
+            },
+        };
+        let label = input.label.clone().unwrap_or_default();
+        let mut store = self.seq_store.write().await;
+        let Some(seq) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        match seq.add_message(&input.from, &input.to, &label, kind) {
+            Ok(idx) => success("Added message", json!({ "index": idx, "message_count": seq.messages.len() })),
+            Err(e) => engine_error(e),
+        }
+    }
+
+    #[tool(description = "Remove the message at the given index (see describe_sequence).")]
+    async fn remove_message(&self, Parameters(input): Parameters<RemoveMessageInput>) -> String {
+        let mut store = self.seq_store.write().await;
+        let Some(seq) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        match seq.remove_message(input.index) {
+            Ok(()) => success("Removed message", json!({ "message_count": seq.messages.len() })),
+            Err(e) => engine_error(e),
+        }
+    }
+
+    #[tool(description = "Describe a sequence: title, participants, and ordered messages (with indexes).")]
+    async fn describe_sequence(&self, Parameters(input): Parameters<SequenceHandleInput>) -> String {
+        let mut store = self.seq_store.write().await;
+        let Some(seq) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        let participants: Vec<_> = seq
+            .participants
+            .iter()
+            .map(|p| json!({ "id": p.id, "label": p.label, "actor": p.actor }))
+            .collect();
+        let messages: Vec<_> = seq
+            .messages
+            .iter()
+            .enumerate()
+            .map(|(i, m)| json!({ "index": i, "from": m.from, "to": m.to, "label": m.label, "kind": m.kind.label() }))
+            .collect();
+        success(
+            "Sequence described",
+            json!({
+                "title": seq.title,
+                "participant_count": seq.participants.len(),
+                "message_count": seq.messages.len(),
+                "participants": participants,
+                "messages": messages,
+            }),
+        )
+    }
+
+    #[tool(
+        description = "Export a sequence diagram. format: 'drawio' (mxGraph XML with UML lifelines), \
+        'mermaid' (sequenceDiagram), 'svg', or 'json'. With output_path it is written to disk; \
+        otherwise returned inline under data.content."
+    )]
+    async fn export_sequence(&self, Parameters(input): Parameters<ExportSequenceInput>) -> String {
+        let mut store = self.seq_store.write().await;
+        let Some(seq) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        let content = match input.format.to_ascii_lowercase().as_str() {
+            "drawio" | "xml" => sequence::export::to_drawio(seq),
+            "mermaid" | "mmd" => sequence::export::to_mermaid(seq),
+            "svg" => sequence::export::to_svg(seq),
+            "json" => match serde_json::to_string_pretty(seq) {
+                Ok(s) => s,
+                Err(e) => return error(category::INVALID_INPUT, e.to_string(), "Could not serialize the sequence."),
+            },
+            other => {
+                return error(category::INVALID_INPUT, format!("Unknown format '{other}'"), "Use drawio, mermaid, svg, or json.")
+            }
+        };
+        match &input.output_path {
+            Some(path) => match std::fs::write(path, &content) {
+                Ok(()) => success(
+                    format!("Exported {} to {}", input.format, path),
+                    json!({ "format": input.format, "output_path": path, "bytes": content.len() }),
+                ),
+                Err(e) => error(category::IO_ERROR, e.to_string(), "Check the output path and permissions."),
+            },
+            None => success(
+                format!("Exported {}", input.format),
+                json!({ "format": input.format, "content": content }),
+            ),
+        }
     }
 }
 
