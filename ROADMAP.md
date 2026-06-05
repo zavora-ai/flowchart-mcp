@@ -7,10 +7,10 @@ Effort: S = <½ day · M = ~1 day · L = multi-day.
 |----|---------|----------------|--------|--------|
 | 1 | Manual position/size overrides (optional `x/y/w/h` per node) | Biggest flexibility gap; pin specifics over auto-layout | M | ★★★★★ — ✅ done (`move_node`) |
 | 2 | Edge waypoints + fixed ports (`exitX/Y`, `entryX/Y`, `Array as="points"`) | Controls connector routing for clean complex diagrams | M | ★★★★★ — ✅ done (`route_edge`) |
-| 3 | Expand stencil catalog (~37 → ~500 curated keys) | Real AWS/Azure/UML/network coverage | M | ★★★★★ |
-| 4 | PNG/PDF export (render SVG → raster/pdf) | Most-requested output; usable outside diagrams.net | M | ★★★★☆ |
+| 3 | Expand stencil catalog (~37 → ~500 curated keys) | Real AWS/Azure/UML/network coverage | M | ★★★★★ — ✅ done (159 keys + raw passthrough) |
+| 4 | PNG/PDF export (render SVG → raster/pdf) | Most-requested output; usable outside diagrams.net | M | ★★★★☆ — ✅ vector PDF done; PNG deferred (dep weight) |
 | 5 | Layers (`parent="0"` layer cells, visibility) | Core draw.io structuring primitive | S | ★★★☆☆ |
-| 6 | HTML / rich-text labels (`<b>`,`<br>`,`<font>`) | Real formatting; needed for many shapes | S | ★★★★☆ |
+| 6 | HTML / rich-text labels (`<b>`,`<br>`,`<font>`) | Real formatting; needed for many shapes | S | ★★★★☆ — ✅ done (`html` flag) |
 | 7 | True UML class shape (stackLayout compartments) | Replaces the `\n` fake | M | ★★★☆☆ |
 | 8 | Gradients + glass/sketch styles | Raises aesthetic ceiling cheaply | S | ★★★☆☆ |
 | 9 | Sequence diagrams (lifelines, activations, messages) | A whole diagram class we lack | L | ★★★★☆ |

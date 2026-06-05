@@ -88,6 +88,9 @@ pub struct AddNodeInput {
     /// Optional draw.io stencil key (see list_stencils) or raw `mxgraph.*`
     /// token. Renders in the drawio export.
     pub stencil: Option<String>,
+    /// Treat the label as rich HTML (`<b>`, `<i>`, `<br>`, `<font>`…). Renders
+    /// formatted in drawio; tags are stripped to plain text elsewhere.
+    pub html: Option<bool>,
     #[serde(flatten)]
     pub style: StyleFields,
 }
@@ -99,6 +102,8 @@ pub struct UpdateNodeInput {
     pub id: String,
     pub label: Option<String>,
     pub shape: Option<String>,
+    /// Treat the label as rich HTML (renders formatted in drawio).
+    pub html: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

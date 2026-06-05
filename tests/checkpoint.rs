@@ -443,3 +443,43 @@ fn manual_overrides_and_edit_crud() {
 
     s.call("close_flowchart", json!({"handle":h}));
 }
+
+#[test]
+fn wave2_stencils_html_pdf() {
+    let mut s = Server::start();
+
+    // Expanded stencil catalog: aws category now has many entries.
+    let aws = s.call("list_stencils", json!({"category":"aws"}));
+    assert!(aws["data"]["count"].as_u64().unwrap() >= 20, "aws count: {}", aws["data"]["count"]);
+    let k8s = s.call("list_stencils", json!({"query":"statefulset"}));
+    assert!(k8s["data"]["count"].as_u64().unwrap() >= 1);
+
+    let created = s.call("create_flowchart", json!({"direction":"TB"}));
+    let h = created["data"]["handle"].as_str().unwrap().to_string();
+
+    // HTML rich-text label: rendered in drawio, stripped in mermaid.
+    s.call("add_node", json!({"handle":h,"id":"a","label":"<b>Build</b><br>stage","html":true}));
+    s.call("add_node", json!({"handle":h,"id":"b","label":"Cache","stencil":"k8s.sts"}));
+    s.call("add_edge", json!({"handle":h,"from":"a","to":"b"}));
+
+    let xml = s.call("export_flowchart", json!({"handle":h,"format":"drawio"}));
+    let x = xml["data"]["content"].as_str().unwrap();
+    assert!(x.contains("&lt;b&gt;Build&lt;/b&gt;"));
+    assert!(x.contains("mxgraph.kubernetes.sts"));
+
+    let mmd = s.call("export_flowchart", json!({"handle":h,"format":"mermaid"}));
+    assert!(mmd["data"]["content"].as_str().unwrap().contains("Build stage"));
+
+    // PDF export requires output_path and produces a valid PDF file.
+    let noerr = s.call("export_flowchart", json!({"handle":h,"format":"pdf"}));
+    assert_eq!(noerr["status"], "error");
+    let path = std::env::temp_dir().join("flowchart_wave2.pdf");
+    let p = path.to_string_lossy().to_string();
+    let pdf = s.call("export_flowchart", json!({"handle":h,"format":"pdf","output_path":p}));
+    assert_eq!(pdf["status"], "success");
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(bytes.starts_with(b"%PDF-1.4"));
+    let _ = std::fs::remove_file(&path);
+
+    s.call("close_flowchart", json!({"handle":h}));
+}

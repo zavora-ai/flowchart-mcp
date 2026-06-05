@@ -33,6 +33,43 @@ fn ident(s: &str) -> String {
     }
 }
 
+/// Strip HTML tags to plain text, turning `<br>`/`</p>`/`</div>` into spaces.
+/// Used by the text/SVG exporters when a node's label is rich HTML.
+fn strip_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    let lower = s.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut i = 0;
+    for c in s.chars() {
+        if c == '<' {
+            // line-breaking tags become a space
+            if lower[i..].starts_with("<br") || lower[i..].starts_with("</p") || lower[i..].starts_with("</div") {
+                if !out.ends_with(' ') {
+                    out.push(' ');
+                }
+            }
+            in_tag = true;
+        } else if c == '>' {
+            in_tag = false;
+        } else if !in_tag {
+            out.push(c);
+        }
+        i += c.len_utf8();
+    }
+    let _ = bytes;
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A node's label as plain text — tags stripped only when the label is HTML.
+pub(crate) fn plain_label(node: &super::Node) -> String {
+    if node.html == Some(true) {
+        strip_html(&node.label)
+    } else {
+        node.label.clone()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Mermaid
 // ---------------------------------------------------------------------------
@@ -52,7 +89,7 @@ pub fn to_mermaid(fc: &Flowchart) -> String {
             out.push_str(&format!(
                 "    {}{}\n",
                 ident(&node.id),
-                node.shape.mermaid_wrap(&node.label)
+                node.shape.mermaid_wrap(&plain_label(node))
             ));
         }
     }
@@ -63,7 +100,7 @@ pub fn to_mermaid(fc: &Flowchart) -> String {
                 out.push_str(&format!(
                     "        {}{}\n",
                     ident(&node.id),
-                    node.shape.mermaid_wrap(&node.label)
+                    node.shape.mermaid_wrap(&plain_label(node))
                 ));
             }
         }
@@ -151,7 +188,7 @@ pub fn to_dot(fc: &Flowchart) -> String {
         out.push_str(&format!(
             "  {} [label=\"{}\", shape={}{}];\n",
             ident(&node.id),
-            dot_escape(&node.label),
+            dot_escape(&plain_label(node)),
             dot_shape(node.shape),
             dot_style(&node.style),
         ));
@@ -976,7 +1013,7 @@ fn svg_label(node: &super::Node, b: Box) -> String {
         "  <text x=\"{tx:.1}\" y=\"{baseline:.1}\" font-family=\"{family}\" font-size=\"{size}\" \
          text-anchor=\"{anchor}\" dominant-baseline=\"middle\" fill=\"{}\"{extra}>{}</text>\n",
         s.text_color.as_deref().unwrap_or("#000"),
-        xml_escape(&node.label),
+        xml_escape(&plain_label(node)),
     )
 }
 
@@ -1182,6 +1219,20 @@ mod tests {
         assert!(s.starts_with("<svg"));
         assert!(s.contains("marker id=\"arrow\""));
         assert!(s.contains("polygon"));
+    }
+
+    #[test]
+    fn html_label_stripped_in_text_kept_in_drawio() {
+        let mut fc = Flowchart::new(Direction::TB);
+        fc.add_node("a", "<b>Title</b><br>line two", Shape::Rectangle).unwrap();
+        fc.set_node_html("a", Some(true)).unwrap();
+        let m = to_mermaid(&fc);
+        assert!(m.contains("Title line two"), "got: {m}");
+        assert!(!m.contains("<b>"));
+        let mut doc = Document::new(Direction::TB);
+        *doc.chart() = fc;
+        let x = to_drawio(&doc);
+        assert!(x.contains("&lt;b&gt;Title&lt;/b&gt;"));
     }
 
     #[test]

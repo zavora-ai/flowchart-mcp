@@ -5,15 +5,50 @@
 //! style token. We therefore don't ship any art: we emit the correct token and
 //! the stencil renders when the file is opened in diagrams.net.
 //!
-//! A node's stencil is a friendly catalog key (e.g. `aws.ec2`) or a raw
-//! `mxgraph.<lib>.<name>` token passed straight through.
+//! The catalog is split into one data file per library (see the modules below);
+//! this file holds the shared logic that resolves, styles, and lists them.
+
+mod aws;
+mod azure;
+mod bpmn;
+mod gcp;
+mod kubernetes;
+mod mockup;
+mod network;
+mod uml;
 
 use serde_json::{json, Value};
+
+/// Catalog entry: friendly key → (mxgraph path, human description).
+/// For AWS the path is the bare resource name; [`make`] wraps it in the
+/// `resourceIcon`/`resIcon` form that draw.io expects.
+pub struct Entry {
+    pub key: &'static str,
+    pub path: &'static str,
+    pub desc: &'static str,
+}
+
+/// All per-library entry tables, assembled at compile time.
+const LIBS: &[&[Entry]] = &[
+    aws::ENTRIES,
+    azure::ENTRIES,
+    gcp::ENTRIES,
+    network::ENTRIES,
+    kubernetes::ENTRIES,
+    uml::ENTRIES,
+    bpmn::ENTRIES,
+    mockup::ENTRIES,
+];
+
+/// Iterate every catalog entry across all libraries.
+fn entries() -> impl Iterator<Item = &'static Entry> {
+    LIBS.iter().flat_map(|s| s.iter())
+}
 
 /// A resolved stencil: the draw.io `shape=` token body and the library it
 /// belongs to (drives the base style).
 pub struct Resolved {
-    /// e.g. "mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ec2" or "mxgraph.kubernetes.pod".
+    /// e.g. "shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ec2" or "shape=mxgraph.kubernetes.pod".
     pub shape: String,
     pub library: Library,
 }
@@ -33,7 +68,7 @@ pub enum Library {
 }
 
 impl Library {
-    fn from_path(path: &str) -> Self {
+    pub fn from_path(path: &str) -> Self {
         let p = path.strip_prefix("mxgraph.").unwrap_or(path);
         match p.split('.').next().unwrap_or("") {
             "aws4" | "aws3" | "aws" => Self::Aws,
@@ -41,7 +76,8 @@ impl Library {
             "gcp2" | "gcp" => Self::Gcp,
             "cisco" | "cisco19" | "networks" | "rack" => Self::Network,
             "kubernetes" => Self::Kubernetes,
-            "uml" => Self::Uml,
+            "uml" | "umlActor" | "umlLifeline" | "umlBoundary" | "umlControl" | "umlEntity"
+            | "umlFrame" => Self::Uml,
             "er" => Self::Er,
             "bpmn" | "bpmn2" => Self::Bpmn,
             "mockup" => Self::Mockup,
@@ -65,7 +101,7 @@ impl Library {
         }
     }
 
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Aws => "aws",
             Self::Azure => "azure",
@@ -81,66 +117,6 @@ impl Library {
     }
 }
 
-/// Catalog entry: friendly key → (mxgraph path, human description).
-/// For AWS the path is the bare resource name; `resolve` wraps it in the
-/// `resourceIcon`/`resIcon` form that draw.io expects.
-struct Entry {
-    key: &'static str,
-    path: &'static str,
-    desc: &'static str,
-}
-
-/// Curated subset of the most-used stencils. The long tail is reachable via the
-/// raw `mxgraph.<lib>.<name>` passthrough in [`resolve`].
-const CATALOG: &[Entry] = &[
-    // AWS (aws4) — path is the resource icon name.
-    Entry { key: "aws.ec2", path: "mxgraph.aws4.ec2", desc: "EC2 instance" },
-    Entry { key: "aws.lambda", path: "mxgraph.aws4.lambda", desc: "Lambda function" },
-    Entry { key: "aws.s3", path: "mxgraph.aws4.s3", desc: "S3 bucket" },
-    Entry { key: "aws.rds", path: "mxgraph.aws4.rds", desc: "RDS database" },
-    Entry { key: "aws.dynamodb", path: "mxgraph.aws4.dynamodb", desc: "DynamoDB" },
-    Entry { key: "aws.vpc", path: "mxgraph.aws4.virtual_private_cloud", desc: "VPC" },
-    Entry { key: "aws.api_gateway", path: "mxgraph.aws4.api_gateway", desc: "API Gateway" },
-    Entry { key: "aws.cloudfront", path: "mxgraph.aws4.cloudfront", desc: "CloudFront CDN" },
-    Entry { key: "aws.sns", path: "mxgraph.aws4.simple_notification_service", desc: "SNS" },
-    Entry { key: "aws.sqs", path: "mxgraph.aws4.simple_queue_service", desc: "SQS" },
-    Entry { key: "aws.elb", path: "mxgraph.aws4.elastic_load_balancing", desc: "Elastic Load Balancing" },
-    Entry { key: "aws.user", path: "mxgraph.aws4.user", desc: "User" },
-    // Azure
-    Entry { key: "azure.vm", path: "mxgraph.azure.virtual_machine", desc: "Virtual machine" },
-    Entry { key: "azure.sql", path: "mxgraph.azure.sql_database", desc: "SQL database" },
-    Entry { key: "azure.storage", path: "mxgraph.azure.storage", desc: "Storage account" },
-    Entry { key: "azure.functions", path: "mxgraph.azure.function_apps", desc: "Function app" },
-    // GCP
-    Entry { key: "gcp.compute", path: "mxgraph.gcp2.compute_engine", desc: "Compute Engine" },
-    Entry { key: "gcp.storage", path: "mxgraph.gcp2.cloud_storage", desc: "Cloud Storage" },
-    Entry { key: "gcp.functions", path: "mxgraph.gcp2.cloud_functions", desc: "Cloud Functions" },
-    // Network (cisco19)
-    Entry { key: "net.router", path: "mxgraph.cisco19.routers.router", desc: "Router" },
-    Entry { key: "net.switch", path: "mxgraph.cisco19.switches.layer_3_switch", desc: "Switch" },
-    Entry { key: "net.firewall", path: "mxgraph.cisco19.security.firewall", desc: "Firewall" },
-    Entry { key: "net.server", path: "mxgraph.cisco19.servers.standard_host", desc: "Server" },
-    Entry { key: "net.cloud", path: "mxgraph.cisco19.misc.cloud", desc: "Cloud" },
-    // Kubernetes
-    Entry { key: "k8s.pod", path: "mxgraph.kubernetes.pod", desc: "Pod" },
-    Entry { key: "k8s.deploy", path: "mxgraph.kubernetes.deploy", desc: "Deployment" },
-    Entry { key: "k8s.svc", path: "mxgraph.kubernetes.svc", desc: "Service" },
-    Entry { key: "k8s.ing", path: "mxgraph.kubernetes.ing", desc: "Ingress" },
-    Entry { key: "k8s.node", path: "mxgraph.kubernetes.node", desc: "Node" },
-    // UML
-    Entry { key: "uml.actor", path: "umlActor", desc: "UML actor (stick figure)" },
-    Entry { key: "uml.component", path: "component", desc: "UML component" },
-    Entry { key: "uml.lifeline", path: "umlLifeline", desc: "UML lifeline" },
-    Entry { key: "uml.boundary", path: "umlBoundary", desc: "UML boundary" },
-    // BPMN
-    Entry { key: "bpmn.task", path: "mxgraph.bpmn.task", desc: "BPMN task" },
-    Entry { key: "bpmn.gateway", path: "mxgraph.bpmn.gateway", desc: "BPMN gateway" },
-    Entry { key: "bpmn.event", path: "mxgraph.bpmn.event", desc: "BPMN event" },
-    // Mockup
-    Entry { key: "mockup.button", path: "mxgraph.mockup.forms.button", desc: "UI button" },
-    Entry { key: "mockup.textbox", path: "mxgraph.mockup.forms.textBox", desc: "UI text box" },
-];
-
 /// Resolve a stencil key or raw token into a draw.io `shape=` body + library.
 /// Returns `None` only for an empty string.
 pub fn resolve(key: &str) -> Option<Resolved> {
@@ -149,7 +125,7 @@ pub fn resolve(key: &str) -> Option<Resolved> {
         return None;
     }
     // Catalog hit.
-    if let Some(e) = CATALOG.iter().find(|e| e.key.eq_ignore_ascii_case(k)) {
+    if let Some(e) = entries().find(|e| e.key.eq_ignore_ascii_case(k)) {
         return Some(make(e.path));
     }
     // Raw passthrough: accept "mxgraph.<lib>.<name>", "shape=mxgraph...", or a
@@ -182,8 +158,7 @@ pub fn drawio_base(r: &Resolved) -> String {
 pub fn list(category: Option<&str>, query: Option<&str>) -> Value {
     let cat = category.map(|c| c.to_ascii_lowercase());
     let q = query.map(|q| q.to_ascii_lowercase());
-    let items: Vec<Value> = CATALOG
-        .iter()
+    let items: Vec<Value> = entries()
         .filter(|e| {
             let lib = Library::from_path(e.path).label();
             cat.as_deref().map(|c| lib == c || e.key.starts_with(c)).unwrap_or(true)
@@ -236,8 +211,18 @@ mod tests {
     #[test]
     fn list_filters() {
         let v = list(Some("aws"), None);
-        assert!(v["count"].as_u64().unwrap() >= 5);
+        assert!(v["count"].as_u64().unwrap() >= 20);
         let v = list(None, Some("lambda"));
         assert_eq!(v["count"], 1);
+    }
+
+    #[test]
+    fn catalog_is_substantial_and_unique() {
+        let all: Vec<&str> = entries().map(|e| e.key).collect();
+        assert!(all.len() >= 150, "catalog has {} entries", all.len());
+        let mut sorted = all.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), all.len(), "duplicate stencil keys present");
     }
 }

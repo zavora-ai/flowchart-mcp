@@ -159,7 +159,7 @@ credential_bindings = []
 
 [[tools]]
 name = "export_flowchart"
-description = "Export to drawio (mxGraph XML, all pages), mermaid, dot (Graphviz), svg, or json — inline or to a file path."
+description = "Export to drawio (mxGraph XML, all pages), mermaid, dot (Graphviz), svg, pdf (vector, requires output_path), or json — inline or to a file path."
 risk_class = "local_write"
 requires_approval = false
 credential_bindings = []
