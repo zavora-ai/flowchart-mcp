@@ -371,6 +371,12 @@ fn compute_laned(
         }
     }
 
+    // Fork/join centring: align a decision (fork) on the cross-axis midpoint of
+    // its branch targets, and a merge (join: >=2 incoming) on its sources, so
+    // branches splay symmetrically and reconverge cleanly instead of weaving
+    // past boxes. The node is clamped to stay inside its own lane band.
+    center_forks_and_joins(fc, &mut boxes, vertical, &lane_start, &lane_cross, &node_lane);
+
     if matches!(fc.direction, Direction::BT | Direction::RL) {
         for b in boxes.values_mut() {
             if vertical {
@@ -599,6 +605,83 @@ fn collect_subtree(id: &str, children: &HashMap<&str, Vec<&str>>, set: &mut std:
     if let Some(kids) = children.get(id) {
         for k in kids {
             collect_subtree(k, children, set);
+        }
+    }
+}
+
+/// Center fork nodes (>=2 outgoing) on their targets and join nodes (>=2
+/// incoming) on their sources, along the cross axis, so branches splay and
+/// reconverge symmetrically. Each moved node is clamped to remain fully within
+/// its own lane band. Operates in pre-flip coordinates.
+#[allow(clippy::too_many_arguments)]
+fn center_forks_and_joins(
+    fc: &Flowchart,
+    boxes: &mut HashMap<String, Box>,
+    vertical: bool,
+    lane_start: &[f64],
+    lane_cross: &[f64],
+    node_lane: &HashMap<&str, usize>,
+) {
+    // Cross-axis centre & size accessors for the current orientation.
+    let cross_c = |b: &Box| if vertical { b.x + b.w / 2.0 } else { b.y + b.h / 2.0 };
+    let cross_s = |b: &Box| if vertical { b.w } else { b.h };
+
+    // Collect neighbour centres for each fork/join, then compute the target
+    // centre. Done in two phases so reads don't fight the borrow checker.
+    let mut moves: Vec<(String, f64)> = Vec::new();
+    let neighbours = |id: &str, outgoing: bool| -> Vec<String> {
+        fc.edges
+            .iter()
+            .filter_map(|e| {
+                if outgoing && e.from == id {
+                    Some(e.to.clone())
+                } else if !outgoing && e.to == id {
+                    Some(e.from.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    };
+
+    for n in &fc.nodes {
+        let outs = fc.edges.iter().filter(|e| e.from == n.id).count();
+        let ins = fc.edges.iter().filter(|e| e.to == n.id).count();
+        // Prefer centring a fork on its branches; else a join on its sources.
+        let neigh = if outs >= 2 {
+            neighbours(&n.id, true)
+        } else if ins >= 2 {
+            neighbours(&n.id, false)
+        } else {
+            continue;
+        };
+        let centres: Vec<f64> = neigh
+            .iter()
+            .filter_map(|m| boxes.get(m).map(|b| cross_c(b)))
+            .collect();
+        if centres.is_empty() {
+            continue;
+        }
+        let avg = centres.iter().sum::<f64>() / centres.len() as f64;
+        moves.push((n.id.clone(), avg));
+    }
+
+    for (id, target_centre) in moves {
+        let Some(b) = boxes.get(&id).copied() else { continue };
+        let li = *node_lane.get(id.as_str()).unwrap_or(&0);
+        let band_lo = lane_start[li] + LANE_PAD;
+        let band_hi = lane_start[li] + lane_cross[li] - LANE_PAD;
+        let half = cross_s(&b) / 2.0;
+        // Clamp the new centre so the box stays inside its lane band.
+        let lo = band_lo + half;
+        let hi = (band_hi - half).max(lo);
+        let c = target_centre.clamp(lo, hi);
+        if let Some(bm) = boxes.get_mut(&id) {
+            if vertical {
+                bm.x = c - bm.w / 2.0;
+            } else {
+                bm.y = c - bm.h / 2.0;
+            }
         }
     }
 }

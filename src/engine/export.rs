@@ -435,6 +435,14 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
         ));
     }
 
+    // Step numbering (optional): a sequential number on each "step" node
+    // (process/document/decision — not start/end terminators) in flow order.
+    let step_numbers: HashMap<&str, usize> = if fc.number_steps {
+        number_steps(fc)
+    } else {
+        HashMap::new()
+    };
+
     // Nodes — absolute coordinates; parented to their layer cell when set.
     for node in &fc.nodes {
         let b = l.get(&node.id);
@@ -454,9 +462,26 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
             b.w,
             b.h,
         ));
-    }
 
-    // --- Edge anchoring for distinct, traceable branches (properties L3/L4) ---
+        // Step-number badge: a small numbered circle pinned to the node's top.
+        if let Some(&num) = step_numbers.get(node.id.as_str()) {
+            let bw = 22.0;
+            let bx = b.x + b.w - bw / 2.0 - 6.0;
+            let by = b.y + header - bw / 2.0 + 6.0;
+            cells.push_str(&format!(
+                "        <mxCell id=\"{}_badge\" value=\"{}\" style=\"ellipse;whiteSpace=wrap;html=1;\
+                 fillColor=#1F2A37;strokeColor=#FFFFFF;fontColor=#FFFFFF;fontStyle=1;fontSize=11;\
+                 verticalAlign=middle;align=center;\" vertex=\"1\" parent=\"1\">\n          \
+                 <mxGeometry x=\"{:.0}\" y=\"{:.0}\" width=\"{:.0}\" height=\"{:.0}\" as=\"geometry\"/>\n        </mxCell>\n",
+                ident(&node.id),
+                num,
+                bx,
+                by,
+                bw,
+                bw,
+            ));
+        }
+    }
     // Group edges by source (fan-out) and target (fan-in).
     let mut out_edges: HashMap<&str, Vec<usize>> = HashMap::new();
     let mut in_edges: HashMap<&str, Vec<usize>> = HashMap::new();
@@ -485,6 +510,8 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
     // Tip for a branch leaving a decision toward `b` (source box `a`).
     // Rear tip a decision receives its single incoming edge on.
     let diamond_entry_tip = |a: Box, b: Box| -> (f64, f64) {
+        // dmain > 0 means the source sits AHEAD of the decision along the flow
+        // (so the edge comes from the front); <= 0 means it comes from behind.
         let dmain = main_of(a) - main_of(b);
         let dcross = cross_of(a) - cross_of(b);
         let rear = if vertical { TOP } else { LEFT };
@@ -492,7 +519,7 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
         let up = if vertical { LEFT } else { TOP };
         let down = if vertical { RIGHT } else { BOTTOM };
         if dmain.abs() >= dcross.abs() {
-            if dmain >= 0.0 { rear } else { front }
+            if dmain <= 0.0 { rear } else { front }
         } else if dcross < 0.0 {
             up
         } else {
@@ -711,6 +738,83 @@ fn drawio_page(name: &str, fc: &Flowchart) -> String {
         (l.width + 40.0).max(800.0),
         (l.height + header + 40.0).max(600.0),
     )
+}
+
+/// Assign sequential step numbers (1-based) to step nodes in flow order.
+/// Terminators (stadium start/end) are skipped — they are not "steps".
+/// Ordering: BFS from start terminators (or, lacking any, the first node),
+/// which follows the reading order of the flow; ties fall back to node order.
+fn number_steps(fc: &Flowchart) -> HashMap<&str, usize> {
+    use std::collections::{HashSet, VecDeque};
+
+    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut indeg: HashMap<&str, usize> = fc.nodes.iter().map(|n| (n.id.as_str(), 0)).collect();
+    for e in &fc.edges {
+        adj.entry(e.from.as_str()).or_default().push(e.to.as_str());
+        *indeg.entry(e.to.as_str()).or_insert(0) += 1;
+    }
+
+    // Seeds: start terminators with no incoming edge, else any zero-indegree
+    // node, else the first node. Preserve declaration order among seeds.
+    let mut seeds: Vec<&str> = fc
+        .nodes
+        .iter()
+        .filter(|n| n.shape == Shape::Stadium && indeg.get(n.id.as_str()).copied().unwrap_or(0) == 0)
+        .map(|n| n.id.as_str())
+        .collect();
+    if seeds.is_empty() {
+        seeds = fc
+            .nodes
+            .iter()
+            .filter(|n| indeg.get(n.id.as_str()).copied().unwrap_or(0) == 0)
+            .map(|n| n.id.as_str())
+            .collect();
+    }
+    if seeds.is_empty() {
+        if let Some(n) = fc.nodes.first() {
+            seeds.push(n.id.as_str());
+        }
+    }
+
+    let is_step = |id: &str| {
+        fc.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.shape != Shape::Stadium)
+            .unwrap_or(false)
+    };
+
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut queue: VecDeque<&str> = VecDeque::new();
+    for s in &seeds {
+        if visited.insert(s) {
+            queue.push_back(s);
+        }
+    }
+    let mut numbers: HashMap<&str, usize> = HashMap::new();
+    let mut counter = 0usize;
+    while let Some(u) = queue.pop_front() {
+        if is_step(u) {
+            counter += 1;
+            numbers.insert(u, counter);
+        }
+        if let Some(succ) = adj.get(u) {
+            for &v in succ {
+                if visited.insert(v) {
+                    queue.push_back(v);
+                }
+            }
+        }
+    }
+    // Any node not reached by BFS (disconnected) still gets a number in
+    // declaration order so nothing is left unlabeled.
+    for n in &fc.nodes {
+        if n.shape != Shape::Stadium && !numbers.contains_key(n.id.as_str()) {
+            counter += 1;
+            numbers.insert(n.id.as_str(), counter);
+        }
+    }
+    numbers
 }
 
 /// Swimlane band style. Title bar on the left for horizontal flow (LR/RL),
@@ -975,13 +1079,344 @@ fn bounds(l: &layout::Layout, members: &[String]) -> Option<Box> {
 // SVG
 // ---------------------------------------------------------------------------
 
+/// Default fill/stroke/font per shape — the same palette the draw.io theme uses,
+/// so the SVG canvas matches the diagrams.net export.
+fn theme_colors(shape: Shape) -> (&'static str, &'static str, &'static str) {
+    match shape {
+        Shape::Stadium | Shape::Circle | Shape::DoubleCircle => ("#1F6FB8", "#15527F", "#FFFFFF"),
+        Shape::Diamond => ("#FFF2CC", "#D6B656", "#7A5C00"),
+        Shape::Document | Shape::Note | Shape::Card => ("#DAE8FC", "#6C8EBF", "#1F2A37"),
+        Shape::Cylinder => ("#E1D5E7", "#9673A6", "#1F2A37"),
+        _ => ("#EAF2FB", "#4A7AAA", "#1F2A37"),
+    }
+}
+
+/// Clone a node style, filling in themed defaults for any unset visual field.
+fn themed_style(shape: Shape, style: &Style) -> Style {
+    let (fill, stroke, font) = theme_colors(shape);
+    let mut s = style.clone();
+    if s.fill.is_none() {
+        s.fill = Some(fill.to_string());
+    }
+    if s.stroke.is_none() {
+        s.stroke = Some(stroke.to_string());
+    }
+    if s.text_color.is_none() {
+        s.text_color = Some(font.to_string());
+    }
+    if s.font_size.is_none() {
+        s.font_size = Some(13.0);
+    }
+    if matches!(shape, Shape::Stadium) && s.bold.is_none() {
+        s.bold = Some(true);
+    }
+    s
+}
+
+/// Absolute point on box `b` for an anchor fraction `(fx, fy)`.
+fn anchor_point(b: Box, (fx, fy): (f64, f64)) -> (f64, f64) {
+    (b.x + fx * b.w, b.y + fy * b.h)
+}
+
+/// Outward direction for an anchor on the box border.
+fn anchor_dir((fx, fy): (f64, f64)) -> (f64, f64) {
+    if fy <= 0.01 {
+        (0.0, -1.0)
+    } else if fy >= 0.99 {
+        (0.0, 1.0)
+    } else if fx <= 0.01 {
+        (-1.0, 0.0)
+    } else if fx >= 0.99 {
+        (1.0, 0.0)
+    } else {
+        (0.0, 0.0)
+    }
+}
+
+/// Pick default exit/entry anchors from the relative position of two boxes,
+/// choosing the dominant axis (so forward and back edges both route cleanly).
+fn default_anchors(a: Box, b: Box) -> ((f64, f64), (f64, f64)) {
+    let dx = (b.x + b.w / 2.0) - (a.x + a.w / 2.0);
+    let dy = (b.y + b.h / 2.0) - (a.y + a.h / 2.0);
+    if dx.abs() >= dy.abs() {
+        if dx >= 0.0 { ((1.0, 0.5), (0.0, 0.5)) } else { ((0.0, 0.5), (1.0, 0.5)) }
+    } else if dy >= 0.0 {
+        ((0.5, 1.0), (0.5, 0.0))
+    } else {
+        ((0.5, 0.0), (0.5, 1.0))
+    }
+}
+
+/// Orthogonal (manhattan) route between two boxes given their anchors: a stub
+/// out of each end then an L/Z connection — the flowchart connector look.
+fn ortho_route(a: Box, b: Box, ea: (f64, f64), na: (f64, f64)) -> Vec<(f64, f64)> {
+    let stub = 16.0;
+    let p0 = anchor_point(a, ea);
+    let p3 = anchor_point(b, na);
+    let d0 = anchor_dir(ea);
+    let d3 = anchor_dir(na);
+    let p1 = (p0.0 + d0.0 * stub, p0.1 + d0.1 * stub);
+    let p2 = (p3.0 + d3.0 * stub, p3.1 + d3.1 * stub);
+
+    let mut pts = vec![p0, p1];
+    let aligned = (p1.0 - p2.0).abs() < 0.5 || (p1.1 - p2.1).abs() < 0.5;
+    if !aligned {
+        if d0.0.abs() > 0.0 {
+            let midx = (p1.0 + p2.0) / 2.0;
+            pts.push((midx, p1.1));
+            pts.push((midx, p2.1));
+        } else if d0.1.abs() > 0.0 {
+            let midy = (p1.1 + p2.1) / 2.0;
+            pts.push((p1.0, midy));
+            pts.push((p2.0, midy));
+        } else {
+            // Center anchor (rare): single elbow.
+            pts.push((p2.0, p1.1));
+        }
+    }
+    pts.push(p2);
+    pts.push(p3);
+
+    // Drop consecutive duplicates.
+    let mut out: Vec<(f64, f64)> = Vec::with_capacity(pts.len());
+    for p in pts {
+        if out.last().map(|q| (q.0 - p.0).abs() < 0.5 && (q.1 - p.1).abs() < 0.5).unwrap_or(false) {
+            continue;
+        }
+        out.push(p);
+    }
+    out
+}
+
+/// Midpoint along a polyline (by cumulative length) for label placement.
+fn polyline_midpoint(pts: &[(f64, f64)]) -> (f64, f64) {
+    if pts.is_empty() {
+        return (0.0, 0.0);
+    }
+    let total: f64 = pts.windows(2).map(|w| dist(w[0], w[1])).sum();
+    let mut target = total / 2.0;
+    for w in pts.windows(2) {
+        let d = dist(w[0], w[1]);
+        if d >= target {
+            let t = if d > 0.0 { target / d } else { 0.0 };
+            return (w[0].0 + (w[1].0 - w[0].0) * t, w[0].1 + (w[1].1 - w[0].1) * t);
+        }
+        target -= d;
+    }
+    *pts.last().unwrap()
+}
+
+fn dist(a: (f64, f64), b: (f64, f64)) -> f64 {
+    ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
+}
+
+/// Compute exit/entry anchor fractions per edge — the same decision-tip /
+/// fan-out spreading logic the draw.io exporter uses, so SVG matches it.
+fn compute_edge_anchors(
+    fc: &Flowchart,
+    l: &layout::Layout,
+) -> (HashMap<usize, (f64, f64)>, HashMap<usize, (f64, f64)>) {
+    let mut out_edges: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut in_edges: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, e) in fc.edges.iter().enumerate() {
+        out_edges.entry(e.from.as_str()).or_default().push(i);
+        in_edges.entry(e.to.as_str()).or_default().push(i);
+    }
+    let shape_of: HashMap<&str, Shape> =
+        fc.nodes.iter().map(|n| (n.id.as_str(), n.shape)).collect();
+    let is_diamond = |id: &str| matches!(shape_of.get(id), Some(Shape::Diamond));
+
+    let vertical = fc.direction.is_vertical();
+    let cross_of = |bx: Box| if vertical { bx.x + bx.w / 2.0 } else { bx.y + bx.h / 2.0 };
+    let main_of = |bx: Box| if vertical { bx.y + bx.h / 2.0 } else { bx.x + bx.w / 2.0 };
+
+    const TOP: (f64, f64) = (0.5, 0.0);
+    const BOTTOM: (f64, f64) = (0.5, 1.0);
+    const LEFT: (f64, f64) = (0.0, 0.5);
+    const RIGHT: (f64, f64) = (1.0, 0.5);
+
+    let diamond_entry_tip = |a: Box, b: Box| -> (f64, f64) {
+        let dmain = main_of(a) - main_of(b);
+        let dcross = cross_of(a) - cross_of(b);
+        let rear = if vertical { TOP } else { LEFT };
+        let front = if vertical { BOTTOM } else { RIGHT };
+        let up = if vertical { LEFT } else { TOP };
+        let down = if vertical { RIGHT } else { BOTTOM };
+        if dmain.abs() >= dcross.abs() {
+            if dmain <= 0.0 { rear } else { front }
+        } else if dcross < 0.0 {
+            up
+        } else {
+            down
+        }
+    };
+
+    let frac = |rank: usize, count: usize| (rank as f64 + 1.0) / (count as f64 + 1.0);
+    let order_by_target_cross = |idxs: &[usize], pick_other: &dyn Fn(usize) -> Box| -> Vec<usize> {
+        let mut ord = idxs.to_vec();
+        ord.sort_by(|&i, &j| {
+            cross_of(pick_other(i))
+                .partial_cmp(&cross_of(pick_other(j)))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        ord
+    };
+
+    let mut exit_anchor: HashMap<usize, (f64, f64)> = HashMap::new();
+    for (src, idxs) in out_edges.iter() {
+        if idxs.len() < 2 {
+            continue;
+        }
+        let a = l.get(src);
+        if is_diamond(src) {
+            let ord = order_by_target_cross(idxs, &|i| l.get(&fc.edges[i].to));
+            let (up, fwd, down) = if vertical { (LEFT, BOTTOM, RIGHT) } else { (TOP, RIGHT, BOTTOM) };
+            let n = ord.len();
+            for (rank, &ei) in ord.iter().enumerate() {
+                let b = l.get(&fc.edges[ei].to);
+                let dc = cross_of(b) - cross_of(a);
+                let tip = if n == 2 {
+                    let other = l.get(&fc.edges[ord[1 - rank]].to);
+                    let dc_other = cross_of(other) - cross_of(a);
+                    if (dc - dc_other).abs() >= 24.0 {
+                        if dc <= dc_other { up } else { down }
+                    } else if rank == 0 {
+                        fwd
+                    } else {
+                        down
+                    }
+                } else if rank == 0 {
+                    up
+                } else if rank + 1 == n {
+                    down
+                } else {
+                    fwd
+                };
+                exit_anchor.insert(ei, tip);
+            }
+        } else {
+            let ord = order_by_target_cross(idxs, &|i| l.get(&fc.edges[i].to));
+            let n = ord.len();
+            for (rank, &ei) in ord.iter().enumerate() {
+                let f = frac(rank, n);
+                exit_anchor.insert(ei, if vertical { (f, 1.0) } else { (1.0, f) });
+            }
+        }
+    }
+    for (src, idxs) in out_edges.iter() {
+        if idxs.len() == 1 && is_diamond(src) {
+            let ei = idxs[0];
+            let a = l.get(src);
+            let b = l.get(&fc.edges[ei].to);
+            let dc = cross_of(b) - cross_of(a);
+            let (up, fwd, down) = if vertical { (LEFT, BOTTOM, RIGHT) } else { (TOP, RIGHT, BOTTOM) };
+            let tip = if dc.abs() < 24.0 { fwd } else if dc < 0.0 { up } else { down };
+            exit_anchor.insert(ei, tip);
+        }
+    }
+
+    let mut entry_anchor: HashMap<usize, (f64, f64)> = HashMap::new();
+    for (tgt, idxs) in in_edges.iter() {
+        if idxs.len() < 2 {
+            continue;
+        }
+        if is_diamond(tgt) {
+            let b = l.get(tgt);
+            let mut used: Vec<(f64, f64)> = Vec::new();
+            for &ei in idxs.iter() {
+                let mut tip = diamond_entry_tip(l.get(&fc.edges[ei].from), b);
+                let mut guard = 0;
+                while used.iter().any(|u| (u.0 - tip.0).abs() < 0.01 && (u.1 - tip.1).abs() < 0.01)
+                    && guard < 4
+                {
+                    tip = match tip {
+                        TOP => RIGHT,
+                        RIGHT => BOTTOM,
+                        BOTTOM => LEFT,
+                        _ => TOP,
+                    };
+                    guard += 1;
+                }
+                used.push(tip);
+                entry_anchor.insert(ei, tip);
+            }
+        } else {
+            let ord = order_by_target_cross(idxs, &|i| l.get(&fc.edges[i].from));
+            let n = ord.len();
+            for (rank, &ei) in ord.iter().enumerate() {
+                let f = frac(rank, n);
+                entry_anchor.insert(ei, if vertical { (f, 0.0) } else { (0.0, f) });
+            }
+        }
+    }
+    for (tgt, idxs) in in_edges.iter() {
+        if idxs.len() == 1 && is_diamond(tgt) {
+            let ei = idxs[0];
+            entry_anchor.insert(ei, diamond_entry_tip(l.get(&fc.edges[ei].from), l.get(tgt)));
+        }
+    }
+
+    (exit_anchor, entry_anchor)
+}
+
 pub fn to_svg(fc: &Flowchart) -> String {
     let l = layout::compute(fc);
     let mut body = String::new();
 
-    // Container backdrops, parents first (so children draw on top).
+    // Header band for the title (everything else is drawn inside a <g> shifted
+    // down by `header`, so coordinates stay in layout space).
+    let header = if fc.title.as_deref().map(|t| !t.is_empty()).unwrap_or(false) {
+        46.0
+    } else {
+        0.0
+    };
+
+    // Swimlane bands (full-length) from the lane-aware layout — drawn first so
+    // nodes sit on top. Matches the draw.io band styling.
+    let lane_ids: std::collections::HashSet<&str> =
+        l.lanes.iter().map(|lg| lg.id.as_str()).collect();
+    let vertical = fc.direction.is_vertical();
+    for lg in &l.lanes {
+        let label = fc
+            .subgraphs
+            .iter()
+            .find(|s| s.id == lg.id)
+            .map(|s| s.label.as_str())
+            .unwrap_or("");
+        let (b, t) = (lg.b, layout::LANE_TITLE);
+        // Band body (white) + a tinted title strip.
+        body.push_str(&format!(
+            "  <rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" \
+             fill=\"#FFFFFF\" stroke=\"#9DB3C8\"/>\n",
+            b.x, b.y, b.w, b.h,
+        ));
+        if vertical {
+            body.push_str(&format!(
+                "  <rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{t:.1}\" \
+                 fill=\"#F5F8FB\" stroke=\"#9DB3C8\"/>\n  \
+                 <text x=\"{:.1}\" y=\"{:.1}\" font-family=\"Helvetica\" font-size=\"13\" \
+                 font-weight=\"bold\" fill=\"#1F2A37\" text-anchor=\"middle\">{}</text>\n",
+                b.x, b.y, b.w, b.x + b.w / 2.0, b.y + t / 2.0 + 4.0, xml_escape(label),
+            ));
+        } else {
+            let (cx, cy) = (b.x + t / 2.0, b.y + b.h / 2.0);
+            body.push_str(&format!(
+                "  <rect x=\"{:.1}\" y=\"{:.1}\" width=\"{t:.1}\" height=\"{:.1}\" \
+                 fill=\"#F5F8FB\" stroke=\"#9DB3C8\"/>\n  \
+                 <text x=\"{cx:.1}\" y=\"{cy:.1}\" font-family=\"Helvetica\" font-size=\"13\" \
+                 font-weight=\"bold\" fill=\"#1F2A37\" text-anchor=\"middle\" \
+                 transform=\"rotate(-90 {cx:.1} {cy:.1})\">{}</text>\n",
+                b.x, b.y, b.h, xml_escape(label),
+            ));
+        }
+    }
+
+    // Non-lane container backdrops, parents first (so children draw on top).
     for i in ordered_containers(fc) {
         let sg = &fc.subgraphs[i];
+        if lane_ids.contains(sg.id.as_str()) {
+            continue;
+        }
         if let Some(b) = container_abs_box(fc, &l, &sg.id) {
             let (stroke, dash, fill) = match sg.kind {
                 ContainerKind::Group => ("#999", " stroke-dasharray=\"4 3\"", "none"),
@@ -991,25 +1426,21 @@ pub fn to_svg(fc: &Flowchart) -> String {
                 "  <rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"4\" \
                  fill=\"{fill}\" stroke=\"{stroke}\"{dash}/>\n  \
                  <text x=\"{:.1}\" y=\"{:.1}\" font-family=\"Helvetica\" font-size=\"12\" fill=\"#555\">{}</text>\n",
-                b.x,
-                b.y,
-                b.w,
-                b.h,
-                b.x + 6.0,
-                b.y + 16.0,
-                xml_escape(&sg.label),
+                b.x, b.y, b.w, b.h, b.x + 6.0, b.y + 16.0, xml_escape(&sg.label),
             ));
         }
     }
 
-    for e in &fc.edges {
+    // Edges — orthogonal connectors using shared anchor logic.
+    let (exit_anchor, entry_anchor) = compute_edge_anchors(fc, &l);
+    for (i, e) in fc.edges.iter().enumerate() {
         let (a, b) = (l.get(&e.from), l.get(&e.to));
-        let color = e.color.as_deref().unwrap_or("#333");
-        let width = if e.line == LineStyle::Thick { 3.0 } else { 1.5 };
         let dash = match e.line {
             LineStyle::Dotted => " stroke-dasharray=\"5 4\"",
             _ => "",
         };
+        let width = if e.line == LineStyle::Thick { 3.0 } else { 1.6 };
+        let color = e.color.as_deref().unwrap_or("#44515E");
         // Self-loop: a small arc off the node's top edge.
         if e.from == e.to {
             let lx = a.x + a.w * 0.7;
@@ -1025,7 +1456,7 @@ pub fn to_svg(fc: &Flowchart) -> String {
                 if !lbl.is_empty() {
                     body.push_str(&format!(
                         "  <text x=\"{:.1}\" y=\"{:.1}\" font-family=\"Helvetica\" font-size=\"11\" \
-                         fill=\"#333\" text-anchor=\"middle\">{}</text>\n",
+                         fill=\"#44515E\" text-anchor=\"middle\">{}</text>\n",
                         (lx + rx) / 2.0,
                         ty - r * 2.0 - 2.0,
                         xml_escape(lbl),
@@ -1034,10 +1465,10 @@ pub fn to_svg(fc: &Flowchart) -> String {
             }
             continue;
         }
-        let (x1, y1) = (a.x + a.w / 2.0, a.y + a.h / 2.0);
-        let (x2, y2) = (b.x + b.w / 2.0, b.y + b.h / 2.0);
-        let (sx, sy) = clip_to_box(x2, y2, a);
-        let (tx, ty) = clip_to_box(x1, y1, b);
+        let (def_e, def_n) = default_anchors(a, b);
+        let ea = exit_anchor.get(&i).copied().unwrap_or(def_e);
+        let na = entry_anchor.get(&i).copied().unwrap_or(def_n);
+        let pts = ortho_route(a, b, ea, na);
         let mut markers = String::new();
         if e.resolved_end() != super::Arrow::None {
             markers.push_str(" marker-end=\"url(#arrow)\"");
@@ -1045,22 +1476,32 @@ pub fn to_svg(fc: &Flowchart) -> String {
         if e.resolved_start() != super::Arrow::None {
             markers.push_str(" marker-start=\"url(#arrow-start)\"");
         }
+        let pts_str = pts
+            .iter()
+            .map(|(x, y)| format!("{x:.1},{y:.1}"))
+            .collect::<Vec<_>>()
+            .join(" ");
         body.push_str(&format!(
-            "  <line x1=\"{sx:.1}\" y1=\"{sy:.1}\" x2=\"{tx:.1}\" y2=\"{ty:.1}\" \
-             stroke=\"{color}\" stroke-width=\"{width}\"{dash}{markers}/>\n",
+            "  <polyline points=\"{pts_str}\" fill=\"none\" stroke=\"{color}\" \
+             stroke-width=\"{width}\"{dash}{markers}/>\n",
         ));
         if let Some(lbl) = &e.label {
             if !lbl.is_empty() {
+                let (mx, my) = polyline_midpoint(&pts);
+                let w = lbl.chars().count() as f64 * 6.4 + 8.0;
                 body.push_str(&format!(
-                    "  <text x=\"{:.1}\" y=\"{:.1}\" font-family=\"Helvetica\" font-size=\"11\" \
-                     fill=\"#333\" text-anchor=\"middle\">{}</text>\n",
-                    (sx + tx) / 2.0,
-                    (sy + ty) / 2.0 - 3.0,
-                    xml_escape(lbl),
+                    "  <rect x=\"{:.1}\" y=\"{:.1}\" width=\"{w:.1}\" height=\"16\" rx=\"2\" \
+                     fill=\"#FFFFFF\" opacity=\"0.92\"/>\n  \
+                     <text x=\"{mx:.1}\" y=\"{:.1}\" font-family=\"Helvetica\" font-size=\"11\" \
+                     fill=\"#44515E\" text-anchor=\"middle\" dominant-baseline=\"middle\">{}</text>\n",
+                    mx - w / 2.0, my - 8.0, my, xml_escape(lbl),
                 ));
             }
         }
     }
+
+    // Step-number badges (when enabled).
+    let step_numbers = if fc.number_steps { number_steps(fc) } else { HashMap::new() };
 
     for node in &fc.nodes {
         let b = l.get(&node.id);
@@ -1068,19 +1509,38 @@ pub fn to_svg(fc: &Flowchart) -> String {
             body.push_str(&format!(
                 "  <image href=\"{}\" x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" \
                  preserveAspectRatio=\"xMidYMid meet\"/>\n",
-                xml_escape(uri),
-                b.x,
-                b.y,
-                b.w,
-                b.h,
+                xml_escape(uri), b.x, b.y, b.w, b.h,
             ));
+            body.push_str(&svg_label(node, &node.style, b));
         } else if node.shape == Shape::UmlClass {
             body.push_str(&svg_uml_class(node, b));
             continue;
         } else {
-            body.push_str(&svg_shape(node.shape, b, &node.style));
+            let style = themed_style(node.shape, &node.style);
+            body.push_str(&svg_shape(node.shape, b, &style));
+            body.push_str(&svg_label(node, &style, b));
         }
-        body.push_str(&svg_label(node, b));
+
+        if let Some(&num) = step_numbers.get(node.id.as_str()) {
+            let (cx, cy) = (b.x + b.w - 6.0, b.y + 6.0);
+            body.push_str(&format!(
+                "  <circle cx=\"{cx:.1}\" cy=\"{cy:.1}\" r=\"11\" fill=\"#1F2A37\" stroke=\"#FFFFFF\"/>\n  \
+                 <text x=\"{cx:.1}\" y=\"{cy:.1}\" font-family=\"Helvetica\" font-size=\"11\" \
+                 font-weight=\"bold\" fill=\"#FFFFFF\" text-anchor=\"middle\" dominant-baseline=\"central\">{num}</text>\n",
+            ));
+        }
+    }
+
+    // Title text on top.
+    let mut title_cell = String::new();
+    if header > 0.0 {
+        let title = fc.title.as_deref().unwrap_or("");
+        title_cell = format!(
+            "  <text x=\"{:.1}\" y=\"28\" font-family=\"Helvetica\" font-size=\"18\" \
+             font-weight=\"bold\" fill=\"#1F2A37\">{}</text>\n",
+            layout::MARGIN,
+            xml_escape(title),
+        );
     }
 
     format!(
@@ -1088,12 +1548,16 @@ pub fn to_svg(fc: &Flowchart) -> String {
          viewBox=\"0 0 {:.0} {:.0}\">\n  <defs>\n    \
          <marker id=\"arrow\" markerWidth=\"10\" markerHeight=\"10\" refX=\"8\" refY=\"3\" \
          orient=\"auto\" markerUnits=\"strokeWidth\">\n      \
-         <path d=\"M0,0 L8,3 L0,6 z\" fill=\"#333\"/>\n    </marker>\n    \
+         <path d=\"M0,0 L8,3 L0,6 z\" fill=\"#44515E\"/>\n    </marker>\n    \
          <marker id=\"arrow-start\" markerWidth=\"10\" markerHeight=\"10\" refX=\"0\" refY=\"3\" \
          orient=\"auto\" markerUnits=\"strokeWidth\">\n      \
-         <path d=\"M8,0 L0,3 L8,6 z\" fill=\"#333\"/>\n    </marker>\n  </defs>\n  \
-         <rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n{body}</svg>\n",
-        l.width, l.height, l.width, l.height,
+         <path d=\"M8,0 L0,3 L8,6 z\" fill=\"#44515E\"/>\n    </marker>\n  </defs>\n  \
+         <rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n{title_cell}  \
+         <g transform=\"translate(0,{header})\">\n{body}  </g>\n</svg>\n",
+        l.width,
+        l.height + header,
+        l.width,
+        l.height + header,
     )
 }
 
@@ -1131,17 +1595,11 @@ fn svg_uml_class(node: &super::Node, b: Box) -> String {
     s
 }
 
-fn svg_label(node: &super::Node, b: Box) -> String {
-    let s = &node.style;
+fn svg_label(node: &super::Node, s: &Style, b: Box) -> String {
     let (anchor, tx) = match s.align.as_deref() {
         Some("left") => ("start", b.x + 6.0),
         Some("right") => ("end", b.x + b.w - 6.0),
         _ => ("middle", b.x + b.w / 2.0),
-    };
-    let baseline = if node.image.is_some() {
-        b.y + b.h + 12.0
-    } else {
-        b.y + b.h / 2.0
     };
     let mut extra = String::new();
     if s.bold == Some(true) {
@@ -1152,12 +1610,75 @@ fn svg_label(node: &super::Node, b: Box) -> String {
     }
     let size = s.font_size.unwrap_or(13.0);
     let family = s.font_family.as_deref().unwrap_or("Helvetica");
-    format!(
-        "  <text x=\"{tx:.1}\" y=\"{baseline:.1}\" font-family=\"{family}\" font-size=\"{size}\" \
-         text-anchor=\"{anchor}\" dominant-baseline=\"middle\" fill=\"{}\"{extra}>{}</text>\n",
-        s.text_color.as_deref().unwrap_or("#000"),
-        xml_escape(&plain_label(node)),
-    )
+    let fill = s.text_color.as_deref().unwrap_or("#000");
+
+    // Image labels sit below the image; everything else is centred in the box.
+    if node.image.is_some() {
+        let baseline = b.y + b.h + 12.0;
+        return format!(
+            "  <text x=\"{tx:.1}\" y=\"{baseline:.1}\" font-family=\"{family}\" \
+             font-size=\"{size}\" text-anchor=\"{anchor}\" dominant-baseline=\"middle\" \
+             fill=\"{fill}\"{extra}>{}</text>\n",
+            xml_escape(&plain_label(node)),
+        );
+    }
+
+    // Word-wrap to the usable text width of the shape (a diamond only uses its
+    // centre, so wrap narrower), so long labels don't overflow the box.
+    let usable = match node.shape {
+        Shape::Diamond => b.w * 0.5,
+        Shape::Stadium | Shape::Circle | Shape::DoubleCircle => b.w - 28.0,
+        _ => b.w - 16.0,
+    };
+    let lines = wrap_label(&plain_label(node), usable.max(24.0));
+    let line_h = (size * 1.2).max(14.0);
+    let cy = b.y + b.h / 2.0;
+    let start = cy - (lines.len() as f64 - 1.0) * line_h / 2.0;
+
+    let mut out = format!(
+        "  <text x=\"{tx:.1}\" y=\"{start:.1}\" font-family=\"{family}\" font-size=\"{size}\" \
+         text-anchor=\"{anchor}\" dominant-baseline=\"middle\" fill=\"{fill}\"{extra}>",
+    );
+    for (i, line) in lines.iter().enumerate() {
+        let dy = if i == 0 { 0.0 } else { line_h };
+        out.push_str(&format!(
+            "<tspan x=\"{tx:.1}\" dy=\"{dy:.1}\">{}</tspan>",
+            xml_escape(line)
+        ));
+    }
+    out.push_str("</text>\n");
+    out
+}
+
+/// Greedy word-wrap for SVG labels at ~7.1px/char (matches layout metrics).
+fn wrap_label(label: &str, max_w: f64) -> Vec<String> {
+    const CHAR_W: f64 = 7.1;
+    let words: Vec<&str> = label.split_whitespace().collect();
+    if words.is_empty() {
+        return vec![String::new()];
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut cur_w = 0.0;
+    for w in words {
+        let wl = w.chars().count() as f64 * CHAR_W;
+        let space = if cur.is_empty() { 0.0 } else { CHAR_W };
+        if !cur.is_empty() && cur_w + space + wl > max_w {
+            lines.push(std::mem::take(&mut cur));
+            cur_w = wl;
+            cur.push_str(w);
+        } else {
+            if !cur.is_empty() {
+                cur.push(' ');
+            }
+            cur.push_str(w);
+            cur_w += space + wl;
+        }
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    lines
 }
 
 fn svg_shape(shape: Shape, b: Box, style: &Style) -> String {
@@ -1267,20 +1788,6 @@ fn svg_shape(shape: Shape, b: Box, style: &Style) -> String {
             s
         }
     }
-}
-
-/// Clip the segment from `(fx,fy)` toward box `b`'s center to the box border.
-fn clip_to_box(fx: f64, fy: f64, b: Box) -> (f64, f64) {
-    let (cx, cy) = (b.x + b.w / 2.0, b.y + b.h / 2.0);
-    let dx = fx - cx;
-    let dy = fy - cy;
-    if dx == 0.0 && dy == 0.0 {
-        return (cx, cy);
-    }
-    let hw = b.w / 2.0;
-    let hh = b.h / 2.0;
-    let scale = (hw / dx.abs()).min(hh / dy.abs());
-    (cx + dx * scale, cy + dy * scale)
 }
 
 #[cfg(test)]

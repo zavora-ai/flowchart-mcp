@@ -17,7 +17,7 @@ use crate::types::inputs::{
     ImportMermaidInput, LabelEdgeInput, ListStencilsInput, MoveNodeInput, PageSpec, RemoveEdgeInput,
     RemoveMessageInput, RemoveNodeInput, RouteEdgeInput, SelectPageInput, SequenceHandleInput,
     SetDirectionInput, SetLayoutInput, SetNodeImageInput, SetNodeLayerInput, SetNodeStencilInput,
-    StyleEdgeInput, StyleNodeInput, UpdateEdgeInput, UpdateNodeInput,
+    SetStepNumberingInput, StyleEdgeInput, StyleNodeInput, UpdateEdgeInput, UpdateNodeInput,
 };
 use crate::types::responses::{error, success};
 
@@ -85,6 +85,7 @@ fn build_page_chart(
     spec: PageSpec,
     default_dir: Direction,
     page_index: usize,
+    default_number_steps: bool,
 ) -> Result<(crate::engine::Flowchart, String), String> {
     use crate::engine::Flowchart;
 
@@ -94,6 +95,7 @@ fn build_page_chart(
     };
     let mut fc = Flowchart::new(dir);
     fc.title = spec.title;
+    fc.number_steps = spec.number_steps.unwrap_or(default_number_steps);
 
     // Nodes
     for n in &spec.nodes {
@@ -671,6 +673,20 @@ impl FlowchartServer {
     }
 
     #[tool(
+        description = "Enable or disable step-number badges on the current page. When enabled, the \
+        drawio export stamps a small sequential number on each step (process/decision/document) in \
+        flow order — like a numbered process map. Start/End terminators are not numbered."
+    )]
+    async fn set_step_numbering(&self, Parameters(input): Parameters<SetStepNumberingInput>) -> String {
+        let mut store = self.store.write().await;
+        let Some(doc) = store.get_mut(&input.handle) else {
+            return unknown_handle(&input.handle);
+        };
+        doc.chart().number_steps = input.enabled;
+        success("Set step numbering", json!({ "number_steps": input.enabled }))
+    }
+
+    #[tool(
         description = "Apply a named color palette to every node and edge on the current page: \
         blue, green, gray, purple, orange, or dark."
     )]
@@ -912,11 +928,12 @@ impl FlowchartServer {
         if input.pages.is_empty() {
             return error(category::INVALID_INPUT, "No pages provided", "Provide at least one page in `pages`.");
         }
+        let default_number_steps = input.number_steps.unwrap_or(false);
 
         // Build every page chart first so a failure leaves nothing half-created.
         let mut built: Vec<(crate::engine::Flowchart, String)> = Vec::with_capacity(input.pages.len());
         for (i, page) in input.pages.into_iter().enumerate() {
-            match build_page_chart(page, default_dir, i) {
+            match build_page_chart(page, default_dir, i, default_number_steps) {
                 Ok(pair) => built.push(pair),
                 Err(e) => return e, // already a structured error response
             }

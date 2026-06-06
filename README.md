@@ -67,6 +67,7 @@ export_flowchart { "handle": h, "format": "drawio", "output_path": "login.drawio
 | `add_layer` | Add a named draw.io layer (with visibility). |
 | `set_node_layer` | Assign a node to a layer. |
 | `label_edge` | Position/style an edge's label (along-edge pos, offset, background, border). |
+| `set_step_numbering` | Toggle sequential step-number badges on the current page (numbered process map). |
 | `add_subgraph` | Group nodes into a container (group/container/swimlane/pool, optionally nested). |
 | `add_page` | Add a page to the document and select it. |
 | `select_page` | Select the active page by index. |
@@ -108,6 +109,10 @@ build_document {
 export_pages { "handle": h, "format": "drawio", "output_dir": "out",
                "name_pattern": "{index}-{name}.{ext}" }   // one file per page
 ```
+
+Pass `"number_steps": true` on `build_document` (or per page, or via the
+`set_step_numbering` tool) to stamp sequential step-number badges on each step
+in flow order — a numbered process map. Start/End terminators are not numbered.
 
 `build_document` validates ids, edge endpoints, shapes, and lane membership up
 front, so a bad spec fails cleanly without creating a half-built document.
